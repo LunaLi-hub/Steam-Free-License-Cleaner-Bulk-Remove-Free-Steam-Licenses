@@ -1,6 +1,22 @@
 # Steam Free License Cleaner -Bulk Remove Free Steam Licenses
 
-[English](#en-quickstart) · [中文](#zh-quickstart)
+## About
+
+**Steam Free License Cleaner** is a Tampermonkey userscript that bulk-removes free licenses from your own Steam account — free games, free DLC, demos, betas, and Free Weekend licenses.
+
+It adds a Steam-styled panel to the Account Licenses page, reads every license page automatically, and deletes removable items on the fly. Error 29 items are skipped permanently; other failures are retried at the end of the run; Steam rate limits (error 84) trigger an escalating cooldown. The UI supports English and Chinese.
+
+> Not affiliated with Valve. Deletions are real and not reversible by the script.
+
+---
+
+## 简介
+
+**Steam Free License Cleaner** 是一个 Tampermonkey 用户脚本，用于批量移除你自己 Steam 账户中的免费许可 —— 免费游戏、免费 DLC、试玩、测试版和 Free Weekend 许可。
+
+它在账户许可页面添加一个 Steam 风格面板，自动读取所有分页，并边读边删。错误 29 的项目永久跳过；其他失败会在本轮结束时统一重试；触发限流（错误 84）会自动进入递增冷却。界面支持中英文。
+
+> 与 Valve 无关联。删除操作真实生效，脚本无法撤销。
 
 ---
 
