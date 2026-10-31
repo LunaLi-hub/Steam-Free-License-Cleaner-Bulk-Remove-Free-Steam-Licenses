@@ -1,0 +1,976 @@
+// ==UserScript==
+// @name         Steam Free License Auto Remover
+// @name:zh-CN   STEAM 一键清库存
+// @namespace    https://github.com/PeiqiLi-Github
+// @version      5.2
+// @description  Steam-styled panel. Reads all license pages while deleting; error 29 is skipped for good; other failures are retried at the end; error 84 triggers an escalating cooldown. Live Pending / Deleted / Skipped / Failed tabs. English / 中文 switch.
+// @description:zh-CN  Steam 风格面板；边读取分页边删除；待删除/已删除/已跳过/失败分页签；错误29永久跳过；其他失败最后统一重试；84限流自动递增冷却；中英文切换
+// @author       PeiqiLi + Claude
+// @match        https://store.steampowered.com/account/licenses/*
+// @grant        none
+// @license      MIT
+// ==/UserScript==
+
+(function () {
+    'use strict';
+
+    // ===== Settings (the two inputs in the panel can also change delay / cooldown) =====
+    const CFG = {
+        delaySec: 2,                 // default base delay between deletions (s); actual is 0.6x–1.4x random
+        coolMin: 15,                 // default first rate-limit cooldown (min)
+        coolGrowth: 1.5,             // cooldown multiplier per consecutive rate-limit level
+        coolMax: 120 * 60000,        // cooldown cap (ms)
+        coolJitter: 0.1,             // cooldown random jitter ±10%
+        coolDecayAfter: 20,          // after this many successes in a row, cooldown level drops by 1
+        gapFirst: 3000,              // extra delay added after the first rate limit (ms)
+        gapGrowth: 1.5,              // extra delay multiplier on each further rate limit
+        gapMax: 60000,               // extra delay cap (ms)
+        gapDecayAfter: 25,           // after this many successes in a row, shrink the extra delay
+        gapDecay: 0.85,
+        failDelay: [3000, 6000],     // pause after a failure before the next item
+        breakerAfter: 4,             // this many consecutive failures (non-29) = assume rate limit, cool down
+        maxAttempts: 3,              // give up on an item after this many failures
+        retryPassWait: 30000,        // wait before the end-of-run retry pass
+        netRetryDelay: [5000, 10000],// retry delay when reading a page fails
+        pageFetchDelay: [800, 1800], // pause between page reads
+        maxPages: 3000
+    };
+
+    // ===== i18n =====
+    const I18N = {
+        en: {
+            title: 'License Cleaner',
+            stat_removed: 'Removed (total)', stat_skipped: 'Skipped (error 29)',
+            stat_retry: 'To retry', stat_remain: 'Remaining',
+            notStarted: 'Not started',
+            btn_start: 'Start cleaning', btn_scan: 'Scan list only', btn_stop: 'Stop', btn_reset: 'Reset records',
+            tip_scan: 'Read every page and list the removable items without deleting anything',
+            tip_reset: 'Clear the skipped list, totals, deleted list and cooldown state',
+            set_delay_pre: 'Base delay', set_delay_post: 'sec',
+            set_cool_pre: 'Rate-limit cooldown', set_cool_post: 'min and up',
+            tab_log: 'Log', tab_pending: 'Pending', tab_deleted: 'Deleted', tab_skipped: 'Skipped', tab_failed: 'Failed',
+            filterPh: 'Search name or ID',
+            b_idle: 'Idle', b_run: 'Running', b_cool: 'Cooling down', b_done: 'Done',
+            b_scanned: 'Scan done', b_stopped: 'Stopped', b_scanning: 'Scanning',
+            curScanning: (p, n) => `Scanning pages (${p} read, ${n} found)`,
+            curProcessing: n => `Processing: ${n}`,
+            curScanDone: n => `Scan complete, ${n} pending`,
+            curAllDone: 'All done', curStopped: 'Stopped',
+            eta: s => `About ${s} left`, etaReading: ' (still reading pages)',
+            coolBar: (c, l, r) => `Rate-limit cooldown, <b>${c}</b> left · level ${l}` +
+                (r ? ' — no delete requests are sent during cooldown' : ' — it will wait for the cooldown to end after you press Start'),
+            unitMin: 'min', unitHour: 'h', unitDay: 'd',
+            unknownName: 'Unknown item', nameMissing: '(name not recorded)',
+            processing: 'Processing', queuePos: i => `Queue #${i}`,
+            retryExtra: (a, m, e) => `To retry · failed ${a}/${m} · ${e}`,
+            gaveExtra: e => `Given up · ${e}`,
+            emptyPending: 'Nothing yet. Press "Scan list only" or "Start cleaning" to read the removable items.',
+            emptyDeleted: 'No deletion records yet (only items deleted since v5.1 are recorded).',
+            emptySkipped: 'No skipped items.', emptyFailed: 'No failed items.',
+            noMatch: 'No matching items',
+            more: (n, c) => `${n} items, showing the first ${c}. Use the search box to narrow it down.`,
+            errCode: c => `Error ${c}`,
+            // log lines
+            resetDone: 'Records reset',
+            startLog: (r, s) => `Started (total removed ${r}, skipped on record ${s})`,
+            stillCooling: c => `Still inside the previous cooldown, ${c} left. Waiting first.`,
+            logWait: (l, s) => `${l}, about ${s}s`,
+            pageHttp: s => `Page read: HTTP ${s}, retrying shortly`,
+            pageErr: m => `Page read failed: ${m}, retrying shortly`,
+            readProg: (p, n) => `Read up to page ${p}, ${n} removable found so far`,
+            readDone: (p, n) => `Finished reading ${p} pages, ${n} removable found`,
+            reason84: 'Error 84: rate limited',
+            reasonBreaker: (n, e) => `${n} failures in a row (${e}), probably rate limited`,
+            coolLog: (r, ok, d, l, g) => `${r} (${ok} successes before this). Cooling down ${d} (level ${l}); extra delay per deletion is now ${g}s`,
+            okLog: (n, id) => `✓ ${n} (${id}) deleted`,
+            skipLog: (n, id) => `- ${n} (${id}) error 29, skipped for good`,
+            err24: 'Error 24: login session expired. Refresh the page or sign in again, then press Start.',
+            deferLog: (n, id, e, a, m) => `! ${n} (${id}) ${e}. Skipping for now, will retry at the end (failure ${a}/${m})`,
+            gaveLog: (n, id, a, e) => `✕ Giving up on ${n} (${id}): failed ${a} times, last error ${e}`,
+            retryStart: (n, p) => `Retrying ${n} earlier failures (pass ${p})`,
+            retryWaitLabel: 'Waiting a moment before retrying',
+            rescan: r => `Round ${r}: re-reading all pages to check for leftovers`,
+            scriptErr: m => `Script error: ${m}`,
+            finishLog: (done, r, s, g, t) => `${done ? 'Finished' : 'Stopped'}: removed ${r}, skipped ${s}, gave up ${g} this run; ${t} removed in total`,
+            gaveList: (names, more) => `Given up (press Start later to try again): ${names}${more ? ' …' : ''}`,
+            stopReq: 'Stop requested; will stop after the current step',
+            scanStart: 'Scanning all pages (nothing will be deleted)',
+            scanDone: n => `Scan complete: ${n} removable items. See the Pending tab.`,
+            scanStopped: 'Scan stopped',
+            scanErr: m => `Scan error: ${m}`
+        },
+        zh: {
+            title: '库存清理器',
+            stat_removed: '已删除（累计）', stat_skipped: '已跳过（错误29）',
+            stat_retry: '待重试', stat_remain: '本轮剩余',
+            notStarted: '尚未开始',
+            btn_start: '开始清理', btn_scan: '仅扫描列表', btn_stop: '停止', btn_reset: '重置记录',
+            tip_scan: '只读取所有分页并列出待删除项目，不执行删除',
+            tip_reset: '清除已跳过列表、累计计数、已删除列表和冷却状态',
+            set_delay_pre: '基础间隔', set_delay_post: '秒',
+            set_cool_pre: '限流冷却', set_cool_post: '分钟起',
+            tab_log: '日志', tab_pending: '待删除', tab_deleted: '已删除', tab_skipped: '已跳过', tab_failed: '失败',
+            filterPh: '搜索名称或 ID',
+            b_idle: '空闲', b_run: '运行中', b_cool: '冷却中', b_done: '已完成',
+            b_scanned: '扫描完成', b_stopped: '已停止', b_scanning: '扫描中',
+            curScanning: (p, n) => `正在扫描分页（已读 ${p} 页，发现 ${n} 个）`,
+            curProcessing: n => `正在处理：${n}`,
+            curScanDone: n => `扫描完成，共 ${n} 个待删除`,
+            curAllDone: '全部处理完毕', curStopped: '已停止',
+            eta: s => `预计剩余约 ${s}`, etaReading: '（仍在读取分页）',
+            coolBar: (c, l, r) => `限流冷却中，剩余 <b>${c}</b>　·　第 ${l} 级` +
+                (r ? '，冷却期间不会发送任何删除请求' : '，点击开始后会先等冷却结束'),
+            unitMin: '分钟', unitHour: '小时', unitDay: '天',
+            unknownName: '未知游戏名', nameMissing: '（名称未记录）',
+            processing: '处理中', queuePos: i => `排队第 ${i} 位`,
+            retryExtra: (a, m, e) => `待重试 · 失败 ${a}/${m} · ${e}`,
+            gaveExtra: e => `已放弃 · ${e}`,
+            emptyPending: '暂无。点击"仅扫描列表"或"开始清理"来读取待删除项目',
+            emptyDeleted: '还没有删除记录（只记录 v5.1 之后删除的项目）',
+            emptySkipped: '没有被跳过的项目', emptyFailed: '没有失败的项目',
+            noMatch: '没有匹配的项目',
+            more: (n, c) => `共 ${n} 条，仅显示前 ${c} 条，可用搜索框筛选`,
+            errCode: c => `错误${c}`,
+            resetDone: '记录已重置',
+            startLog: (r, s) => `开始清理（累计已删 ${r}，已记录跳过 ${s}）`,
+            stillCooling: c => `仍在上次的冷却期内，剩余 ${c}，先等待`,
+            logWait: (l, s) => `${l}，约 ${s} 秒`,
+            pageHttp: s => `读取分页 HTTP ${s}，稍后重试`,
+            pageErr: m => `读取分页出错：${m}，稍后重试`,
+            readProg: (p, n) => `已读取到第 ${p} 页，累计发现可删 ${n} 个`,
+            readDone: (p, n) => `分页读取结束，共 ${p} 页，发现可删 ${n} 个`,
+            reason84: '错误84，触发限流',
+            reasonBreaker: (n, e) => `连续失败 ${n} 次（${e}），疑似限流`,
+            coolLog: (r, ok, d, l, g) => `${r}（此前连续成功 ${ok} 个）。冷却 ${d}（第 ${l} 级），之后每次删除额外间隔 ${g} 秒`,
+            okLog: (n, id) => `✓ ${n}（${id}）已删除`,
+            skipLog: (n, id) => `- ${n}（${id}）错误29，已永久跳过`,
+            err24: '错误24：登录会话已失效，请刷新页面或重新登录后再开始',
+            deferLog: (n, id, e, a, m) => `! ${n}（${id}）${e}，先跳过，最后再重试（第 ${a}/${m} 次失败）`,
+            gaveLog: (n, id, a, e) => `✕ 放弃 ${n}（${id}）：失败 ${a} 次，最后一次 ${e}`,
+            retryStart: (n, p) => `开始重试 ${n} 个先前失败的项目（第 ${p} 轮）`,
+            retryWaitLabel: '先等一会儿再重试',
+            rescan: r => `第 ${r} 轮：重新读取分页，检查有无遗漏`,
+            scriptErr: m => `脚本异常：${m}`,
+            finishLog: (done, r, s, g, t) => `${done ? '已完成' : '已停止'}：本次删除 ${r}，跳过 ${s}，放弃 ${g}；累计删除 ${t}`,
+            gaveList: (names, more) => `放弃的项目（可稍后再点开始重试）：${names}${more ? ' ……' : ''}`,
+            stopReq: '已请求停止，当前操作结束后停下',
+            scanStart: '开始扫描所有分页（不会删除任何东西）',
+            scanDone: n => `扫描完成：共 ${n} 个可删除项目，可在"待删除"页签查看`,
+            scanStopped: '扫描已停止',
+            scanErr: m => `扫描异常：${m}`
+        }
+    };
+
+    // ===== Persistent state (survives page reloads) =====
+    const STORE_KEY = 'steamLicenseCleanerState';
+    const DEFAULTS = {
+        skipped: [], removed: 0, minGap: 0,
+        coolLevel: 0, cooldownUntil: 0,
+        delaySec: CFG.delaySec, coolMin: CFG.coolMin,
+        skippedInfo: {},             // packageId -> name (for the Skipped tab)
+        lang: 'en'
+    };
+    function loadState() {
+        try {
+            const s = JSON.parse(localStorage.getItem(STORE_KEY));
+            if (s) return Object.assign({}, DEFAULTS, s);
+        } catch (e) {}
+        return Object.assign({}, DEFAULTS);
+    }
+    function saveState() {
+        try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (e) {}
+    }
+    const state = loadState();
+    const skipSet = new Set(state.skipped);
+    if (!state.skippedInfo || typeof state.skippedInfo !== 'object') state.skippedInfo = {};
+    if (!I18N[state.lang]) state.lang = 'en';
+
+    const t = (k, ...a) => {
+        const v = (I18N[state.lang] && I18N[state.lang][k] !== undefined) ? I18N[state.lang][k] : I18N.en[k];
+        return typeof v === 'function' ? v(...a) : v;
+    };
+
+    // Deleted list is stored separately (it can get long); writes are throttled
+    const DEL_KEY = 'steamLicenseCleanerDeleted';
+    const DEL_MAX = 20000;
+    let deletedList = [];   // [packageId, name, timestamp], oldest first
+    try { deletedList = JSON.parse(localStorage.getItem(DEL_KEY)) || []; } catch (e) {}
+    let delTimer = null;
+    function saveDeleted() {
+        if (delTimer) { clearTimeout(delTimer); delTimer = null; }
+        try { localStorage.setItem(DEL_KEY, JSON.stringify(deletedList)); } catch (e) {}
+    }
+    function recordDeleted(g) {
+        deletedList.push([g.packageId, g.itemName, Date.now()]);
+        if (deletedList.length > DEL_MAX) deletedList.splice(0, deletedList.length - DEL_MAX);
+        if (!delTimer) delTimer = setTimeout(saveDeleted, 3000);
+    }
+
+    // ===== Per-run state =====
+    const run = {
+        running: false, scanning: false, last: '', ctl: null, current: '',
+        queue: [], cur: null,    // pending queue, item in flight
+        retry: new Map(),        // failed, waiting for retry: packageId -> item
+        gaveUp: new Map(),       // given up this run: packageId -> item
+        processed: 0, removedRun: 0, skippedRun: 0,
+        startAt: 0, okStreak: 0, sinceLimit: 0, failStreak: [],
+        wake: null, lockRelease: null
+    };
+
+    // ===== Helpers =====
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    const rand = ([min, max]) => Math.round(min + Math.random() * (max - min));
+    const pad2 = n => String(n).padStart(2, '0');
+    const fmtClock = ms => {
+        const s = Math.ceil(ms / 1000);
+        const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+        return h > 0 ? `${h}:${pad2(m)}:${pad2(sec)}` : `${pad2(m)}:${pad2(sec)}`;
+    };
+    const fmtEta = ms => {
+        const m = Math.round(ms / 60000);
+        if (m < 60) return `${Math.max(1, m)} ${t('unitMin')}`;
+        const h = m / 60;
+        return h < 48 ? `${h.toFixed(1)} ${t('unitHour')}` : `${(h / 24).toFixed(1)} ${t('unitDay')}`;
+    };
+
+    // ===== UI =====
+    let els = null;
+    const origTitle = document.title;
+
+    const CSS = `
+    #slc{margin:14px 0 22px;border-radius:3px;background:linear-gradient(135deg,rgba(22,32,45,.96),rgba(27,40,56,.96));border:1px solid rgba(102,192,244,.18);box-shadow:0 0 14px rgba(0,0,0,.55);color:#c6d4df;font-family:"Motiva Sans",Arial,Helvetica,sans-serif;font-size:13px;overflow:hidden}
+    #slc *{box-sizing:border-box}
+    #slc [hidden]{display:none !important}
+    #slc .slc-head{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:linear-gradient(to right,rgba(62,103,150,.38),rgba(0,0,0,0) 80%);border-bottom:1px solid rgba(0,0,0,.35)}
+    #slc .slc-title{display:flex;align-items:center;gap:9px;font-size:16px;color:#fff;letter-spacing:.03em}
+    #slc .slc-title svg{width:18px;height:18px;fill:#67c1f5}
+    #slc .slc-title em{font-style:normal;font-size:11px;color:#56707f;letter-spacing:0}
+    #slc .slc-headr{display:flex;align-items:center;gap:10px}
+    #slc .slc-lang{border:1px solid rgba(103,193,245,.35);background:none;color:#67c1f5;border-radius:2px;padding:1px 9px;font-size:12px;cursor:pointer;font-family:inherit}
+    #slc .slc-lang:hover{background:rgba(103,193,245,.2);color:#fff}
+    #slc .slc-badge{padding:2px 11px;border-radius:2px;font-size:12px;background:rgba(103,193,245,.15);color:#67c1f5}
+    #slc .slc-badge.run{background:rgba(164,208,7,.16);color:#a4d007}
+    #slc .slc-badge.cool{background:rgba(255,200,44,.16);color:#ffc82c}
+    #slc .slc-badge.done{background:rgba(164,208,7,.16);color:#a4d007}
+    #slc .slc-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:rgba(0,0,0,.3)}
+    #slc .slc-stat{background:rgba(10,18,28,.55);padding:12px 16px}
+    #slc .slc-stat b{display:block;font-size:24px;font-weight:300;color:#fff;line-height:1.2}
+    #slc .slc-stat span{font-size:11px;color:#8f98a0;letter-spacing:.04em}
+    #slc .slc-prog{padding:14px 16px 4px}
+    #slc .slc-bar{height:6px;border-radius:3px;background:rgba(0,0,0,.45);overflow:hidden}
+    #slc .slc-bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,#1a9fff,#67c1f5);transition:width .4s}
+    #slc .slc-meta{display:flex;justify-content:space-between;gap:12px;margin-top:7px;font-size:12px;color:#8f98a0}
+    #slc .slc-meta span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    #slc .slc-cool{margin:10px 16px 0;padding:8px 12px;background:rgba(255,200,44,.08);border-left:3px solid #ffc82c;color:#ffc82c;font-size:12px}
+    #slc .slc-cool b{font-weight:600;font-variant-numeric:tabular-nums}
+    #slc .slc-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:14px 16px}
+    #slc .slc-btn{border:0;border-radius:2px;padding:0 16px;line-height:30px;font-size:13px;cursor:pointer;font-family:inherit;transition:filter .15s}
+    #slc .slc-btn:disabled{opacity:.35;cursor:default}
+    #slc .slc-green{background:linear-gradient(-60deg,#6fa720 5%,#588a1b 95%);color:#d2efa9}
+    #slc .slc-green:not(:disabled):hover{background:linear-gradient(-60deg,#8ed629 5%,#6aa621 95%);color:#fff}
+    #slc .slc-red{background:rgba(212,60,60,.25);color:#ff8a80}
+    #slc .slc-red:not(:disabled):hover{background:rgba(212,60,60,.45);color:#fff}
+    #slc .slc-ghost{background:rgba(103,193,245,.15);color:#67c1f5}
+    #slc .slc-ghost:not(:disabled):hover{background:rgba(103,193,245,.3);color:#fff}
+    #slc .slc-set{margin-left:auto;display:flex;flex-wrap:wrap;gap:14px;color:#8f98a0;font-size:12px}
+    #slc .slc-set label{display:flex;align-items:center;gap:6px}
+    #slc .slc-set input{width:56px;padding:3px 6px;border-radius:2px;border:1px solid #000;background:rgba(0,0,0,.35);color:#fff;font-size:12px;box-shadow:1px 1px 0 rgba(255,255,255,.08)}
+    #slc .slc-log{max-height:260px;overflow-y:auto;padding:10px 16px;background:rgba(0,0,0,.38);border-top:1px solid rgba(0,0,0,.4);font:12px/1.7 Consolas,"Courier New",monospace;color:#9fb0bd}
+    #slc .slc-log div{white-space:pre-wrap;word-break:break-all}
+    #slc .slc-log .t{color:#4b5d6b;margin-right:8px}
+    #slc .slc-log .ok{color:#8ec14a}
+    #slc .slc-log .skip{color:#7f8c97}
+    #slc .slc-log .warn{color:#ffc82c}
+    #slc .slc-log .err{color:#e0605e}
+    #slc .slc-log .info{color:#67c1f5}
+    #slc .slc-log::-webkit-scrollbar{width:8px}
+    #slc .slc-log::-webkit-scrollbar-thumb{background:rgba(103,193,245,.25);border-radius:4px}
+    #slc .slc-tabs{display:flex;align-items:center;flex-wrap:wrap;gap:2px;padding:0 10px;border-top:1px solid rgba(0,0,0,.4);background:rgba(0,0,0,.2)}
+    #slc .slc-tab{background:none;border:0;border-bottom:2px solid transparent;color:#8f98a0;padding:10px 12px;font-size:13px;cursor:pointer;font-family:inherit}
+    #slc .slc-tab:hover{color:#fff}
+    #slc .slc-tab.on{color:#fff;border-bottom-color:#67c1f5;background:rgba(103,193,245,.08)}
+    #slc .slc-tab em{font-style:normal;margin-left:6px;padding:0 7px;border-radius:8px;background:rgba(103,193,245,.18);color:#67c1f5;font-size:11px}
+    #slc .slc-filter{margin-left:auto;width:190px;padding:4px 8px;border-radius:2px;border:1px solid #000;background:rgba(0,0,0,.35);color:#fff;font-size:12px;font-family:inherit;box-shadow:1px 1px 0 rgba(255,255,255,.08)}
+    #slc .slc-list{max-height:320px;overflow-y:auto;background:rgba(0,0,0,.38);border-top:1px solid rgba(0,0,0,.4);font-size:12px}
+    #slc .slc-row{display:grid;grid-template-columns:minmax(0,1fr) 90px 190px;gap:12px;padding:6px 16px;align-items:center}
+    #slc .slc-row:nth-child(even){background:rgba(255,255,255,.025)}
+    #slc .slc-row:hover{background:rgba(103,193,245,.08)}
+    #slc .slc-row .n{color:#c6d4df;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    #slc .slc-row .i{color:#56707f;font-variant-numeric:tabular-nums}
+    #slc .slc-row .x{color:#8f98a0;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    #slc .slc-row .x.bad{color:#e0605e}
+    #slc .slc-row.now .n{color:#a4d007}
+    #slc .slc-empty,#slc .slc-more{padding:18px 16px;color:#56707f;text-align:center}
+    #slc .slc-list::-webkit-scrollbar{width:8px}
+    #slc .slc-list::-webkit-scrollbar-thumb{background:rgba(103,193,245,.25);border-radius:4px}
+    @media (max-width:640px){#slc .slc-stats{grid-template-columns:repeat(2,1fr)}#slc .slc-set{margin-left:0}#slc .slc-row{grid-template-columns:minmax(0,1fr) 120px}#slc .slc-row .i{display:none}#slc .slc-filter{margin-left:0;width:100%}}
+    `;
+
+    function buildUI() {
+        const titleElem = document.querySelector('.page_content > h2');
+        if (!titleElem) return;
+
+        const style = document.createElement('style');
+        style.textContent = CSS;
+        document.head.appendChild(style);
+
+        const root = document.createElement('div');
+        root.id = 'slc';
+        root.innerHTML = `
+          <div class="slc-head">
+            <div class="slc-title">
+              <svg viewBox="0 0 24 24"><path d="M9 3h6l1 2h4v2H4V5h4l1-2zm-3 6h12l-1 12H7L6 9zm4 2v8h1.5v-8H10zm3.5 0v8H15v-8h-1.5z"/></svg>
+              <span data-i18n="title"></span><em>v5.2</em>
+            </div>
+            <div class="slc-headr">
+              <button class="slc-lang" data-k="lang" title="English / 中文"></button>
+              <span class="slc-badge" data-k="badge"></span>
+            </div>
+          </div>
+          <div class="slc-stats">
+            <div class="slc-stat"><b data-k="removed">0</b><span data-i18n="stat_removed"></span></div>
+            <div class="slc-stat"><b data-k="skipped">0</b><span data-i18n="stat_skipped"></span></div>
+            <div class="slc-stat"><b data-k="retry">0</b><span data-i18n="stat_retry"></span></div>
+            <div class="slc-stat"><b data-k="remain">0</b><span data-i18n="stat_remain"></span></div>
+          </div>
+          <div class="slc-prog">
+            <div class="slc-bar"><i data-k="bar"></i></div>
+            <div class="slc-meta"><span data-k="cur"></span><span data-k="eta"></span></div>
+          </div>
+          <div class="slc-cool" data-k="cool" hidden></div>
+          <div class="slc-actions">
+            <button class="slc-btn slc-green" data-k="start" data-i18n="btn_start"></button>
+            <button class="slc-btn slc-ghost" data-k="scan" data-i18n="btn_scan" data-i18n-title="tip_scan"></button>
+            <button class="slc-btn slc-red" data-k="stop" data-i18n="btn_stop" disabled></button>
+            <button class="slc-btn slc-ghost" data-k="reset" data-i18n="btn_reset" data-i18n-title="tip_reset"></button>
+            <div class="slc-set">
+              <label><span data-i18n="set_delay_pre"></span> <input type="number" min="0.5" step="0.5" data-k="delay"> <span data-i18n="set_delay_post"></span></label>
+              <label><span data-i18n="set_cool_pre"></span> <input type="number" min="1" step="1" data-k="coolmin"> <span data-i18n="set_cool_post"></span></label>
+            </div>
+          </div>
+          <div class="slc-tabs">
+            <button class="slc-tab on" data-tab="log"><span data-i18n="tab_log"></span></button>
+            <button class="slc-tab" data-tab="pending"><span data-i18n="tab_pending"></span><em>0</em></button>
+            <button class="slc-tab" data-tab="deleted"><span data-i18n="tab_deleted"></span><em>0</em></button>
+            <button class="slc-tab" data-tab="skipped"><span data-i18n="tab_skipped"></span><em>0</em></button>
+            <button class="slc-tab" data-tab="failed"><span data-i18n="tab_failed"></span><em>0</em></button>
+            <input class="slc-filter" data-k="filter" hidden>
+          </div>
+          <div class="slc-log" data-k="log"></div>
+          <div class="slc-list" data-k="list" hidden></div>`;
+        titleElem.parentNode.insertBefore(root, titleElem.nextSibling);
+
+        els = { root };
+        root.querySelectorAll('[data-k]').forEach(el => { els[el.dataset.k] = el; });
+        root.querySelectorAll('.slc-tab').forEach(b => b.addEventListener('click', () => {
+            view.tab = b.dataset.tab;
+            view.sig = '';
+            render();
+        }));
+        els.filter.addEventListener('input', () => { view.sig = ''; render(); });
+        els.scan.addEventListener('click', scanOnly);
+        els.lang.addEventListener('click', () => {
+            state.lang = state.lang === 'zh' ? 'en' : 'zh';
+            saveState();
+            applyLang();
+            view.sig = '';
+            render();
+        });
+
+        els.delay.value = state.delaySec;
+        els.coolmin.value = state.coolMin;
+        els.delay.addEventListener('change', () => {
+            const v = parseFloat(els.delay.value);
+            state.delaySec = v >= 0.5 ? v : CFG.delaySec;
+            els.delay.value = state.delaySec;
+            saveState();
+        });
+        els.coolmin.addEventListener('change', () => {
+            const v = parseFloat(els.coolmin.value);
+            state.coolMin = v >= 1 ? v : CFG.coolMin;
+            els.coolmin.value = state.coolMin;
+            saveState();
+        });
+        els.start.addEventListener('click', runCleaning);
+        els.stop.addEventListener('click', stopCleaning);
+        els.reset.addEventListener('click', () => {
+            if (run.running) return;
+            state.skipped = []; skipSet.clear();
+            state.removed = 0; state.minGap = 0; state.coolLevel = 0; state.cooldownUntil = 0;
+            state.skippedInfo = {};
+            deletedList = [];
+            saveDeleted();
+            saveState();
+            log(t('resetDone'), 'info');
+            render();
+        });
+
+        applyLang();
+        setInterval(render, 500);
+        render();
+    }
+
+    function applyLang() {
+        if (!els) return;
+        els.root.querySelectorAll('[data-i18n]').forEach(e => { e.textContent = t(e.dataset.i18n); });
+        els.root.querySelectorAll('[data-i18n-title]').forEach(e => { e.title = t(e.dataset.i18nTitle); });
+        els.filter.placeholder = t('filterPh');
+        els.lang.textContent = state.lang === 'zh' ? 'EN' : '中文';
+        document.documentElement.setAttribute('data-slc-lang', state.lang);
+    }
+
+    function log(msg, type) {
+        if (!els) return;
+        const d = document.createElement('div');
+        if (type) d.className = type;
+        const ts = document.createElement('span');
+        ts.className = 't';
+        ts.textContent = new Date().toTimeString().slice(0, 8);
+        d.appendChild(ts);
+        d.appendChild(document.createTextNode(msg));
+        const box = els.log;
+        const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+        box.appendChild(d);
+        while (box.childElementCount > 400) box.removeChild(box.firstChild);
+        if (nearBottom) box.scrollTop = box.scrollHeight;
+    }
+
+    // ===== Tabbed lists =====
+    const view = { tab: 'log', sig: '' };
+    const LIST_CAP = 300;
+
+    function fmtWhen(ts) {
+        const d = new Date(ts), now = new Date();
+        const hm = `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+        return d.toDateString() === now.toDateString() ? hm : `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${hm}`;
+    }
+
+    function listRows(tab) {
+        const rows = [];
+        if (tab === 'pending') {
+            if (run.cur) rows.push({ id: run.cur.packageId, name: run.cur.itemName, extra: t('processing'), now: true });
+            run.queue.forEach((g, i) => rows.push({ id: g.packageId, name: g.itemName, extra: t('queuePos', i + 1) }));
+        } else if (tab === 'deleted') {
+            for (let i = deletedList.length - 1; i >= 0; i--) {
+                const e = deletedList[i];
+                rows.push({ id: e[0], name: e[1], extra: fmtWhen(e[2]) });
+            }
+        } else if (tab === 'skipped') {
+            for (let i = state.skipped.length - 1; i >= 0; i--) {
+                const id = state.skipped[i];
+                rows.push({ id, name: state.skippedInfo[id] || t('nameMissing'), extra: t('errCode', 29) });
+            }
+        } else if (tab === 'failed') {
+            run.retry.forEach(g => rows.push({
+                id: g.packageId, name: g.itemName,
+                extra: t('retryExtra', g.attempts, CFG.maxAttempts, g.lastErr || '')
+            }));
+            run.gaveUp.forEach(g => rows.push({
+                id: g.packageId, name: g.itemName, bad: true,
+                extra: t('gaveExtra', g.lastErr || '')
+            }));
+        }
+        return rows;
+    }
+
+    function renderTabs() {
+        const counts = {
+            pending: run.queue.length + (run.cur ? 1 : 0),
+            deleted: deletedList.length,
+            skipped: state.skipped.length,
+            failed: run.retry.size + run.gaveUp.size
+        };
+        els.root.querySelectorAll('.slc-tab').forEach(b => {
+            const k = b.dataset.tab;
+            b.classList.toggle('on', k === view.tab);
+            const em = b.querySelector('em');
+            if (em) em.textContent = counts[k];
+        });
+
+        const isLog = view.tab === 'log';
+        els.log.hidden = !isLog;
+        els.list.hidden = isLog;
+        els.filter.hidden = isLog;
+        if (isLog) return;
+
+        const q = els.filter.value.trim().toLowerCase();
+        const token = {
+            pending: `${run.queue.length}|${run.queue[0] ? run.queue[0].packageId : ''}|${run.cur ? run.cur.packageId : ''}`,
+            deleted: deletedList.length,
+            skipped: state.skipped.length,
+            failed: `${run.retry.size}|${run.gaveUp.size}|${[...run.retry.values()].reduce((a, g) => a + g.attempts, 0)}`
+        }[view.tab];
+        const sig = `${state.lang}|${view.tab}|${q}|${token}`;
+        if (sig === view.sig) return;
+        view.sig = sig;
+
+        const rows = listRows(view.tab).filter(r =>
+            !q || r.name.toLowerCase().includes(q) || String(r.id).includes(q));
+        const box = els.list;
+        const top = box.scrollTop;
+        box.textContent = '';
+
+        if (!rows.length) {
+            const d = document.createElement('div');
+            d.className = 'slc-empty';
+            const emptyKey = { pending: 'emptyPending', deleted: 'emptyDeleted', skipped: 'emptySkipped', failed: 'emptyFailed' }[view.tab];
+            d.textContent = q ? t('noMatch') : t(emptyKey);
+            box.appendChild(d);
+            return;
+        }
+        const frag = document.createDocumentFragment();
+        rows.slice(0, LIST_CAP).forEach(r => {
+            const row = document.createElement('div');
+            row.className = 'slc-row' + (r.now ? ' now' : '');
+            const n = document.createElement('span'); n.className = 'n'; n.textContent = r.name; n.title = r.name;
+            const i = document.createElement('span'); i.className = 'i'; i.textContent = r.id;
+            const x = document.createElement('span'); x.className = 'x' + (r.bad ? ' bad' : ''); x.textContent = r.extra; x.title = r.extra;
+            row.append(n, i, x);
+            frag.appendChild(row);
+        });
+        if (rows.length > LIST_CAP) {
+            const m = document.createElement('div');
+            m.className = 'slc-more';
+            m.textContent = t('more', rows.length, LIST_CAP);
+            frag.appendChild(m);
+        }
+        box.appendChild(frag);
+        box.scrollTop = top;
+    }
+
+    function render() {
+        if (!els) return;
+        const left = Math.max(0, state.cooldownUntil - Date.now());
+        const ctl = run.ctl;
+
+        let cls = '', label = t('b_idle');
+        if (run.scanning) { cls = 'run'; label = t('b_scanning'); }
+        else if (run.running) { cls = left > 0 ? 'cool' : 'run'; label = left > 0 ? t('b_cool') : t('b_run'); }
+        else if (run.last === 'done') { cls = 'done'; label = t('b_done'); }
+        else if (run.last === 'scanned') { cls = 'done'; label = t('b_scanned'); }
+        else if (run.last === 'stopped') { label = t('b_stopped'); }
+        els.badge.className = 'slc-badge ' + cls;
+        els.badge.textContent = label;
+
+        els.removed.textContent = state.removed;
+        els.skipped.textContent = state.skipped.length;
+        els.retry.textContent = run.retry.size;
+        const remain = ctl ? Math.max(0, ctl.total - ctl.finished) : 0;
+        els.remain.textContent = remain + (ctl && !ctl.readerDone ? '+' : '');
+
+        const pct = ctl && ctl.total ? Math.min(100, ctl.finished / ctl.total * 100) : 0;
+        els.bar.style.width = pct.toFixed(1) + '%';
+
+        if (run.scanning) els.cur.textContent = t('curScanning', ctl ? ctl.pages : 0, ctl ? ctl.total : 0);
+        else if (run.running && run.current) els.cur.textContent = t('curProcessing', run.current);
+        else if (!run.running && run.last === 'scanned') els.cur.textContent = t('curScanDone', ctl ? ctl.total : 0);
+        else if (!run.running && run.last) els.cur.textContent = run.last === 'done' ? t('curAllDone') : t('curStopped');
+        else els.cur.textContent = t('notStarted');
+
+        let eta = '';
+        if (run.running && !run.scanning && run.processed >= 5 && remain > 0) {
+            const per = (Date.now() - run.startAt) / run.processed;
+            eta = t('eta', fmtEta(per * remain));
+            if (ctl && !ctl.readerDone) eta += (state.lang === 'zh' ? '' : ' ') + t('etaReading');
+        } else if (ctl && ctl.total && !run.scanning && run.last !== 'scanned') {
+            eta = `${ctl.finished} / ${ctl.total}`;
+        }
+        els.eta.textContent = eta;
+
+        if (left > 0) {
+            els.cool.hidden = false;
+            els.cool.innerHTML = t('coolBar', fmtClock(left), state.coolLevel, run.running);
+        } else {
+            els.cool.hidden = true;
+        }
+
+        els.start.disabled = run.running;
+        els.scan.disabled = run.running;
+        els.stop.disabled = !run.running;
+        els.reset.disabled = run.running;
+        renderTabs();
+
+        document.title = run.running && ctl && ctl.total
+            ? `[${ctl.finished}/${ctl.total}] ${origTitle}` : origTitle;
+    }
+
+    // ===== Waiting (interruptible by Stop) =====
+    async function waitInterruptible(ms, label) {
+        const end = Date.now() + ms;
+        if (label && ms > 10000) log(t('logWait', label, Math.round(ms / 1000)), 'info');
+        while (Date.now() < end) {
+            if (!run.running) return false;
+            await sleep(Math.min(500, Math.max(0, end - Date.now())));
+        }
+        return run.running;
+    }
+
+    // If we're inside a cooldown, wait it out; false = stopped meanwhile
+    async function honorCooldown() {
+        while (run.running) {
+            const left = state.cooldownUntil - Date.now();
+            if (left <= 0) return true;
+            await sleep(Math.min(500, left));
+        }
+        return false;
+    }
+
+    // ===== Reading pages =====
+    function parseRemovable(doc) {
+        const games = [];
+        doc.querySelectorAll('.account_table tr').forEach(row => {
+            const link = row.querySelector('a[href^="javascript:RemoveFreeLicense"]');
+            if (!link) return;
+            const match = link.getAttribute('href').match(/RemoveFreeLicense\(\s*(\d+)\s*,/);
+            if (!match) return;
+            const packageId = match[1];
+            if (skipSet.has(packageId) || run.gaveUp.has(packageId)) return;
+            const cells = row.querySelectorAll('td');
+            games.push({
+                packageId,
+                itemName: cells[1] ? cells[1].textContent.trim() : t('unknownName'),
+                attempts: 0
+            });
+        });
+        return games;
+    }
+
+    function findNext(html, curOffset) {
+        let best = null;
+        const consider = (token, offset) => {
+            if (offset > curOffset && (!best || offset < best.offset)) best = { token, offset };
+        };
+        let m;
+        const re1 = /continuationToken=([^&"'\s<>]+)(?:&amp;|&)offset=(\d+)/g;
+        while ((m = re1.exec(html))) consider(m[1], +m[2]);
+        const re2 = /offset=(\d+)(?:&amp;|&)continuationToken=([^&"'\s<>]+)/g;
+        while ((m = re2.exec(html))) consider(m[2], +m[1]);
+        return best;
+    }
+
+    async function fetchPage(url) {
+        for (let n = 0; n < 5; n++) {
+            if (!run.running) return null;
+            try {
+                const resp = await fetch(url, { credentials: 'same-origin' });
+                if (resp.ok) return await resp.text();
+                log(t('pageHttp', resp.status), 'warn');
+            } catch (e) {
+                log(t('pageErr', e.message), 'warn');
+            }
+            if (!(await waitInterruptible(rand(CFG.netRetryDelay)))) return null;
+        }
+        return null;
+    }
+
+    async function readerTask(queue, ctl) {
+        const seen = new Set();
+        let url = 'https://store.steampowered.com/account/licenses/';
+        let offset = 0;
+        try {
+            for (let page = 1; page <= CFG.maxPages && run.running; page++) {
+                const html = await fetchPage(url);
+                if (html === null) break;
+
+                const doc = new DOMParser().parseFromString(html, 'text/html');
+                for (const g of parseRemovable(doc)) {
+                    if (seen.has(g.packageId)) continue;
+                    seen.add(g.packageId);
+                    queue.push(g);
+                    ctl.total++;
+                }
+                ctl.pages = page;
+                if (page % 5 === 1) log(t('readProg', page, ctl.total), 'info');
+
+                const next = findNext(html, offset);
+                if (!next) {
+                    log(t('readDone', page, ctl.total), 'info');
+                    break;
+                }
+                offset = next.offset;
+                url = `https://store.steampowered.com/account/licenses/?continuationToken=${next.token}&offset=${next.offset}`;
+                await sleep(rand(CFG.pageFetchDelay));
+            }
+        } finally {
+            ctl.readerDone = true;
+        }
+    }
+
+    // ===== Deleting =====
+    async function removeGame(packageId) {
+        try {
+            const response = await fetch('https://store.steampowered.com/account/removelicense', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: `sessionid=${encodeURIComponent(g_sessionID)}&packageid=${encodeURIComponent(packageId)}`
+            });
+            if (response.status === 429) return { success: false, code: 84, error: 'HTTP 429' };
+            if (!response.ok) return { success: false, error: `HTTP ${response.status}` };
+            const data = await response.json();
+            if (data.success === 1) return { success: true };
+            return { success: false, code: data.success, error: t('errCode', data.success) };
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
+    }
+
+    // One cooldown: level +1, longer wait each time, and widen the pacing afterwards
+    function triggerCooldown(reason) {
+        state.coolLevel = Math.min(state.coolLevel + 1, 12);
+        let dur = Math.min(CFG.coolMax, state.coolMin * 60000 * Math.pow(CFG.coolGrowth, state.coolLevel - 1));
+        dur *= 1 + (Math.random() * 2 - 1) * CFG.coolJitter;
+        state.cooldownUntil = Date.now() + dur;
+        state.minGap = Math.min(CFG.gapMax, Math.max(CFG.gapFirst, Math.round(state.minGap * CFG.gapGrowth)));
+        saveState();
+        log(t('coolLog', reason, run.sinceLimit, fmtClock(dur), state.coolLevel, Math.round(state.minGap / 1000)), 'warn');
+        run.sinceLimit = 0;
+        run.okStreak = 0;
+    }
+
+    function onSuccess() {
+        run.okStreak++;
+        run.sinceLimit++;
+        run.failStreak = [];
+        if (run.okStreak % CFG.coolDecayAfter === 0 && state.coolLevel > 0) {
+            state.coolLevel--;
+        }
+        if (run.okStreak % CFG.gapDecayAfter === 0 && state.minGap > 0) {
+            state.minGap = Math.round(state.minGap * CFG.gapDecay);
+            if (state.minGap < 1000) state.minGap = 0;
+        }
+    }
+
+    // Returns 'removed' | 'skipped' | 'deferred' | 'gaveup' | 'stop'
+    async function attemptInner(g, ctl) {
+        while (run.running) {
+            if (!(await honorCooldown())) return 'stop';
+            run.current = g.itemName;
+            const res = await removeGame(g.packageId);
+
+            if (res.success) {
+                onSuccess();
+                state.removed++;
+                recordDeleted(g);
+                run.removedRun++; run.processed++; ctl.finished++;
+                run.retry.delete(g.packageId);
+                saveState();
+                log(t('okLog', g.itemName, g.packageId), 'ok');
+                return 'removed';
+            }
+
+            if (res.code === 29) {
+                state.skipped.push(g.packageId);
+                state.skippedInfo[g.packageId] = g.itemName;
+                skipSet.add(g.packageId);
+                run.skippedRun++; run.processed++; ctl.finished++;
+                run.retry.delete(g.packageId);
+                saveState();
+                log(t('skipLog', g.itemName, g.packageId), 'skip');
+                return 'skipped';
+            }
+
+            if (res.code === 84) {
+                // Rate limiting is global, so another item won't help: after the cooldown
+                // try the same item again as the probe.
+                triggerCooldown(t('reason84'));
+                continue;
+            }
+
+            if (res.code === 24) {
+                log(t('err24'), 'err');
+                run.running = false;
+                return 'stop';
+            }
+
+            // Any other failure: move on, retry at the end
+            g.attempts = (g.attempts || 0) + 1;
+            g.lastErr = res.error;
+            run.okStreak = 0;
+            run.failStreak.push(g);
+
+            if (run.failStreak.length >= CFG.breakerAfter) {
+                // Several failures in a row looks like throttling: don't count them against the items
+                run.failStreak.forEach(x => { x.attempts = Math.max(0, x.attempts - 1); });
+                run.failStreak = [];
+                run.retry.set(g.packageId, g);
+                triggerCooldown(t('reasonBreaker', CFG.breakerAfter, res.error));
+                return 'deferred';
+            }
+
+            if (g.attempts >= CFG.maxAttempts) {
+                run.gaveUp.set(g.packageId, g);
+                run.retry.delete(g.packageId);
+                run.processed++; ctl.finished++;
+                log(t('gaveLog', g.itemName, g.packageId, g.attempts, res.error), 'err');
+                return 'gaveup';
+            }
+
+            run.retry.set(g.packageId, g);
+            log(t('deferLog', g.itemName, g.packageId, res.error, g.attempts, CFG.maxAttempts), 'warn');
+            return 'deferred';
+        }
+        return 'stop';
+    }
+
+    async function attempt(g, ctl) {
+        run.cur = g;
+        try { return await attemptInner(g, ctl); }
+        finally { run.cur = null; }
+    }
+
+    async function pace(r) {
+        if (!run.running) return;
+        let ms;
+        if (r === 'deferred' || r === 'gaveup') {
+            ms = rand(CFG.failDelay);
+        } else {
+            const d = state.delaySec * 1000;
+            ms = rand([d * 0.6, d * 1.4]) + state.minGap;
+        }
+        await waitInterruptible(ms);
+    }
+
+    // ===== Keep awake (best effort) =====
+    async function keepAwake(on) {
+        try {
+            if (on) {
+                if (navigator.wakeLock && !run.wake) run.wake = await navigator.wakeLock.request('screen');
+                if (navigator.locks && !run.lockRelease) {
+                    navigator.locks.request('slc-keepalive', () => new Promise(res => { run.lockRelease = res; }));
+                }
+            } else {
+                if (run.wake) { await run.wake.release(); run.wake = null; }
+                if (run.lockRelease) { run.lockRelease(); run.lockRelease = null; }
+            }
+        } catch (e) {}
+    }
+    document.addEventListener('visibilitychange', () => {
+        if (run.running && document.visibilityState === 'visible') { run.wake = null; keepAwake(true); }
+    });
+    window.addEventListener('beforeunload', e => {
+        saveDeleted();
+        if (run.running) { e.preventDefault(); e.returnValue = ''; }
+    });
+
+    // ===== Main flow =====
+    async function runCleaning() {
+        if (run.running) return;
+        run.running = true;
+        run.last = '';
+        run.processed = 0; run.removedRun = 0; run.skippedRun = 0;
+        run.startAt = Date.now();
+        run.okStreak = 0; run.sinceLimit = 0; run.failStreak = [];
+        run.retry.clear();
+        run.gaveUp.clear();
+        keepAwake(true);
+
+        log(t('startLog', state.removed, state.skipped.length), 'info');
+        if (state.cooldownUntil > Date.now()) {
+            log(t('stillCooling', fmtClock(state.cooldownUntil - Date.now())), 'warn');
+        }
+
+        let finishedAll = false;
+        try {
+            let round = 0;
+            while (run.running) {
+                round++;
+                if (round > 1) log(t('rescan', round), 'info');
+                const queue = run.queue = [];
+                const ctl = { readerDone: false, total: 0, finished: 0, pages: 0 };
+                run.ctl = ctl;
+                readerTask(queue, ctl);
+
+                // Phase 1: delete while reading; failures go to the retry list
+                while (run.running) {
+                    if (!queue.length) {
+                        if (ctl.readerDone) break;
+                        await sleep(300);
+                        continue;
+                    }
+                    const g = queue.shift();
+                    const r = await attempt(g, ctl);
+                    if (r === 'stop') break;
+                    await pace(r);
+                }
+
+                // Phase 2: retry everything that failed earlier
+                let pass = 0;
+                while (run.running && run.retry.size) {
+                    pass++;
+                    log(t('retryStart', run.retry.size, pass), 'info');
+                    if (!(await waitInterruptible(CFG.retryPassWait, t('retryWaitLabel')))) break;
+                    const items = [...run.retry.values()];
+                    run.retry.clear();
+                    for (const g of items) {
+                        if (!run.running) break;
+                        const r = await attempt(g, ctl);
+                        if (r === 'stop') break;
+                        await pace(r);
+                    }
+                }
+
+                if (!run.running) break;
+                if (ctl.finished === 0) { finishedAll = true; break; }
+            }
+        } catch (e) {
+            log(t('scriptErr', e && e.message), 'err');
+        }
+
+        run.last = finishedAll ? 'done' : 'stopped';
+        run.running = false;
+        keepAwake(false);
+        saveState();
+        saveDeleted();
+
+        log(t('finishLog', finishedAll, run.removedRun, run.skippedRun, run.gaveUp.size, state.removed), finishedAll ? 'ok' : 'info');
+        if (run.gaveUp.size) {
+            const names = [...run.gaveUp.values()].slice(0, 20).map(x => `${x.itemName}(${x.packageId})`).join(', ');
+            log(t('gaveList', names, run.gaveUp.size > 20), 'err');
+        }
+        render();
+    }
+
+    // Read all pages only (no deleting)
+    async function scanOnly() {
+        if (run.running) return;
+        run.running = true;
+        run.scanning = true;
+        run.last = '';
+        run.queue = [];
+        const ctl = { readerDone: false, total: 0, finished: 0, pages: 0 };
+        run.ctl = ctl;
+        log(t('scanStart'), 'info');
+        try {
+            await readerTask(run.queue, ctl);
+        } catch (e) {
+            log(t('scanErr', e && e.message), 'err');
+        }
+        const completed = run.running;
+        run.last = completed ? 'scanned' : 'stopped';
+        run.running = false;
+        run.scanning = false;
+        log(completed ? t('scanDone', ctl.total) : t('scanStopped'), completed ? 'ok' : 'info');
+        render();
+    }
+
+    function stopCleaning() {
+        if (!run.running) return;
+        run.running = false;
+        log(t('stopReq'), 'info');
+    }
+
+    // ===== Start =====
+    function waitForPage() {
+        return new Promise(resolve => {
+            if (document.querySelector('.page_content > h2')) return resolve();
+            const observer = new MutationObserver(() => {
+                if (document.querySelector('.page_content > h2')) {
+                    observer.disconnect();
+                    resolve();
+                }
+            });
+            observer.observe(document.body, { childList: true, subtree: true });
+        });
+    }
+    waitForPage().then(buildUI);
+})();
