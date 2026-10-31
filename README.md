@@ -42,7 +42,7 @@
 | HTTP 429 | Same as error 84 — rate limited | Treated exactly like error 84 | Same as error 84 |
 | Other / unknown | Temporary network or server error | Skips the item for now and retries at the end of the run (max 3 attempts) | Let it run; if it keeps failing, check your network |
 
-[⬆️ Back to top](#top)
+
 
 ---
 
@@ -56,4 +56,4 @@
 | HTTP 429 | 与错误 84 相同，触发限流 | 按错误 84 处理 | 同错误 84 |
 | 其他 / 未知 | 临时网络或服务器错误 | 先跳过，本轮结束时统一重试（最多 3 次） | 让它继续跑；若持续失败，检查网络 |
 
-[⬆️ 回到顶部](#top)
+
