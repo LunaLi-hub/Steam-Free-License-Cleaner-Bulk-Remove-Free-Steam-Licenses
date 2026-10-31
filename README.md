@@ -1,0 +1,1 @@
+# Steam-Free-License-Auto-Remover
