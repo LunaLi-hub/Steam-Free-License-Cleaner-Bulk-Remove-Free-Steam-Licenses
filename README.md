@@ -1,4 +1,6 @@
 # Steam-Free-License-Auto-Remover
+Thanks Claude
+
 [🇨🇳 中文](#中文教程) | [🇬🇧 English](#english-guide)
 
 ---
