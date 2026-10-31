@@ -31,3 +31,29 @@
 ---
 
 <a id="top"></a>
+
+## Error Codes - Causes and What to Do
+
+| Error | Likely cause | What the script does | What you can do |
+|---|---|---|---|
+| **84** | Deleting too fast — Steam's rate limit was triggered | Automatically enters an escalating cooldown and slows down subsequent deletions | Nothing — just wait. Do not open a second tab or lower the delay |
+| **29** | The license is likely no longer available in the store (delisted / not removable by the user) | Records it in the **Skipped** tab and skips it permanently | Nothing — it cannot be removed from the script side |
+| **24** | Login session expired | Stops the run immediately | Refresh the page, sign in again, then press **Start cleaning** |
+| HTTP 429 | Same as error 84 — rate limited | Treated exactly like error 84 | Same as error 84 |
+| Other / unknown | Temporary network or server error | Skips the item for now and retries at the end of the run (max 3 attempts) | Let it run; if it keeps failing, check your network |
+
+[⬆️ Back to top](#top)
+
+---
+
+## 错误码 · 原因与处理
+
+| 错误码 | 可能原因 | 脚本的处理方式 | 你可以做什么 |
+|---|---|---|---|
+| **84** | 删除间隔太短，触发 Steam 限流 | 自动进入递增冷却，并放慢后续删除节奏 | 无需操作，等冷却结束即可。不要开第二个标签页，也不要调小间隔 |
+| **29** | 推测是该许可已无法在商店获取（已下架 / 用户不可移除） | 记入「已跳过」页签，之后永久跳过 | 脚本侧无法解决，无需操作 |
+| **24** | 登录会话失效 | 立即停止本轮 | 刷新页面、重新登录后，再点 **开始清理** |
+| HTTP 429 | 与错误 84 相同，触发限流 | 按错误 84 处理 | 同错误 84 |
+| 其他 / 未知 | 临时网络或服务器错误 | 先跳过，本轮结束时统一重试（最多 3 次） | 让它继续跑；若持续失败，检查网络 |
+
+[⬆️ 回到顶部](#top)
