@@ -5,7 +5,7 @@
 ---
 
 <a id="en-quickstart"></a>
-## 🇬🇧 Quick Start
+## EN Quick Start
 
 1. Install [Tampermonkey](https://www.tampermonkey.net/) or [Violentmonkey](https://violentmonkey.github.io/)
 2. [Install the script](https://raw.githubusercontent.com/<user>/<repo>/main/steam-free-license-cleaner.user.js)
