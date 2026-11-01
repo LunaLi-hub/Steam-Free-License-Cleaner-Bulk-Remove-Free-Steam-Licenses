@@ -1,6 +1,6 @@
 # Steam Free License Cleaner
 
-![Steam Free License Cleaner](assets/Banner.png)
+![Steam Free License Cleaner](https://raw.githubusercontent.com/Lunalulunana/Steam-Free-License-Cleaner-Bulk-Remove-Free-Steam-Licenses/main/assets/Banner.png)
 
 **Bulk remove unwanted free Steam licenses with selective filtering.**
 
@@ -9,6 +9,7 @@ Clean up your Steam library by removing unwanted free games, DLCs, soundtracks, 
 [Greasy Fork](https://greasyfork.org/zh-CN/scripts/603249-steam-free-license-cleaner) · [GitHub Repository](https://github.com/Lunalulunana/Steam-Free-License-Cleaner-Bulk-Remove-Free-Steam-Licenses)
 
 ---
+![Steam Free License Cleaner](https://raw.githubusercontent.com/Lunalulunana/Steam-Free-License-Cleaner-Bulk-Remove-Free-Steam-Licenses/main/assets/Screenshot.png)
 
 ## Language / 语言
 
