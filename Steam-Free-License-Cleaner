@@ -3,8 +3,8 @@
 // @name:zh-CN   STEAM 一键清库存
 // @namespace    https://github.com/lulunana1245611/Steam-Free-License-Cleaner-Bulk-Remove-Free-Steam-Licenses
 // @version      1.0
-// @description  Steam-styled panel. Reads all license pages while deleting; error 29 is skipped for good; other failures are retried at the end; error 84 triggers a cooldown that starts at 5 min and adds 1 min per level, capped at 15 min. Includes a Clear-cooldown button. Live Pending / Deleted / Skipped / Failed tabs. English / 中文 switch.
-// @description:zh-CN  Steam 风格面板；边读取分页边删除；待删除/已删除/已跳过/失败分页签；错误29永久跳过；其他失败最后统一重试；84限流冷却从5分钟起，每次+1分钟，最多15分钟；新增清除冷却按钮；中英文切换
+// @description  Latest: added skip-first-N (those N items are deleted last), Restore skipped list, Clear cooldown, and a confirmation before resetting records.
+// @description:zh-CN  最新版：新增“跳过前 N 个、最后删除”“恢复跳过列表”“清除冷却”，重置记录前需确认。
 // @author       luna + Claude
 // @match        https://store.steampowered.com/account/licenses/*
 // @grant        none
@@ -14,29 +14,27 @@
 (function () {
     'use strict';
 
-    // ===== Settings (the two inputs in the panel can also change delay / cooldown) =====
     const CFG = {
-        delaySec: 2,                 // default base delay between deletions (s); actual is 0.6x–1.4x random
-        coolMin: 5,                  // first cooldown (min); panel allows 1~15
-        coolStepMin: 1,              // +1 min per consecutive rate-limit level
-        coolMax: 15 * 60000,         // hard cap 15 min (ms), applied after jitter
-        coolJitter: 0.1,             // cooldown random jitter ±10%, then clamped to [coolMin, coolMax]
-        coolDecayAfter: 20,          // after this many successes in a row, cooldown level drops by 1
-        gapFirst: 3000,              // extra delay added after the first rate limit (ms)
-        gapGrowth: 1.5,              // extra delay multiplier on each further rate limit
-        gapMax: 60000,               // extra delay cap (ms)
-        gapDecayAfter: 25,           // after this many successes in a row, shrink the extra delay
+        delaySec: 2,
+        coolMin: 5,
+        coolStepMin: 1,
+        coolMax: 15 * 60000,
+        coolJitter: 0.1,
+        coolDecayAfter: 20,
+        gapFirst: 3000,
+        gapGrowth: 1.5,
+        gapMax: 60000,
+        gapDecayAfter: 25,
         gapDecay: 0.85,
-        failDelay: [3000, 6000],     // pause after a failure before the next item
-        breakerAfter: 4,             // this many consecutive failures (non-29) = assume rate limit, cool down
-        maxAttempts: 3,              // give up on an item after this many failures
-        retryPassWait: 30000,        // wait before the end-of-run retry pass
-        netRetryDelay: [5000, 10000],// retry delay when reading a page fails
-        pageFetchDelay: [800, 1800], // pause between page reads
+        failDelay: [3000, 6000],
+        breakerAfter: 4,
+        maxAttempts: 3,
+        retryPassWait: 30000,
+        netRetryDelay: [5000, 10000],
+        pageFetchDelay: [800, 1800],
         maxPages: 3000
     };
 
-    // ===== i18n =====
     const I18N = {
         en: {
             title: 'License Cleaner',
@@ -45,15 +43,20 @@
             notStarted: 'Not started',
             btn_start: 'Start cleaning', btn_scan: 'Scan list only', btn_stop: 'Stop', btn_reset: 'Reset records',
             btn_clearCool: 'Clear cooldown',
+            btn_restoreSkip: 'Restore skipped list',
             tip_scan: 'Read every page and list the removable items without deleting anything',
             tip_reset: 'Clear the skipped list, totals, deleted list and cooldown state',
+            tip_restoreSkip: 'Restore the skipped (error 29) list that was backed up when you last reset records',
+            confirmReset: 'Reset all records?\n\nThis clears the skipped list, totals, deleted list and cooldown state. The skipped list is backed up first, so you can bring it back later with the "Restore skipped list" button.',
             set_delay_pre: 'Base delay', set_delay_post: 'sec',
             set_cool_pre: 'First cooldown', set_cool_post: 'min (+1 each, max 15)',
+            set_skip_pre: 'Skip first', set_skip_post: 'items (deleted last)',
             tab_log: 'Log', tab_pending: 'Pending', tab_deleted: 'Deleted', tab_skipped: 'Skipped', tab_failed: 'Failed',
             filterPh: 'Search name or ID',
             b_idle: 'Idle', b_run: 'Running', b_cool: 'Cooling down', b_done: 'Done',
             b_scanned: 'Scan done', b_stopped: 'Stopped', b_scanning: 'Scanning',
             curScanning: (p, n) => `Scanning pages (${p} read, ${n} found)`,
+            curPreparing: 'Preparing queue (reading the first batch)',
             curProcessing: n => `Processing: ${n}`,
             curScanDone: n => `Scan complete, ${n} pending`,
             curAllDone: 'All done', curStopped: 'Stopped',
@@ -63,6 +66,7 @@
             unitMin: 'min', unitHour: 'h', unitDay: 'd',
             unknownName: 'Unknown item', nameMissing: '(name not recorded)',
             processing: 'Processing', queuePos: i => `Queue #${i}`,
+            tailPos: i => `Last batch #${i}`,
             retryExtra: (a, m, e) => `To retry · failed ${a}/${m} · ${e}`,
             gaveExtra: e => `Given up · ${e}`,
             emptyPending: 'Nothing yet. Press "Scan list only" or "Start cleaning" to read the removable items.',
@@ -71,9 +75,11 @@
             noMatch: 'No matching items',
             more: (n, c) => `${n} items, showing the first ${c}. Use the search box to narrow it down.`,
             errCode: c => `Error ${c}`,
-            // log lines
             resetDone: 'Records reset',
             coolCleared: 'Cooldown cleared',
+            restoreDone: (a, n) => `Restored ${a} skipped items (${n} on record)`,
+            restoreEmpty: 'No backup to restore',
+            prepLog: n => `Skip-first is on: reading the first ${n} items first, they will be deleted last`,
             startLog: (r, s) => `Started (total removed ${r}, skipped on record ${s})`,
             stillCooling: c => `Still inside the previous cooldown, ${c} left. Waiting first.`,
             logWait: (l, s) => `${l}, about ${s}s`,
@@ -108,15 +114,20 @@
             notStarted: '尚未开始',
             btn_start: '开始清理', btn_scan: '仅扫描列表', btn_stop: '停止', btn_reset: '重置记录',
             btn_clearCool: '清除冷却',
+            btn_restoreSkip: '恢复跳过列表',
             tip_scan: '只读取所有分页并列出待删除项目，不执行删除',
             tip_reset: '清除已跳过列表、累计计数、已删除列表和冷却状态',
+            tip_restoreSkip: '恢复上次重置记录时备份的“错误29已跳过”列表',
+            confirmReset: '确定要重置所有记录吗？\n\n将清除已跳过列表、累计计数、已删除列表和冷却状态。已跳过列表会先备份，之后可用“恢复跳过列表”按钮找回。',
             set_delay_pre: '基础间隔', set_delay_post: '秒',
             set_cool_pre: '首次冷却', set_cool_post: '分钟（每次+1，最多15）',
+            set_skip_pre: '跳过前', set_skip_post: '个（最后删除）',
             tab_log: '日志', tab_pending: '待删除', tab_deleted: '已删除', tab_skipped: '已跳过', tab_failed: '失败',
             filterPh: '搜索名称或 ID',
             b_idle: '空闲', b_run: '运行中', b_cool: '冷却中', b_done: '已完成',
             b_scanned: '扫描完成', b_stopped: '已停止', b_scanning: '扫描中',
             curScanning: (p, n) => `正在扫描分页（已读 ${p} 页，发现 ${n} 个）`,
+            curPreparing: '正在准备队列（先读取前一批）',
             curProcessing: n => `正在处理：${n}`,
             curScanDone: n => `扫描完成，共 ${n} 个待删除`,
             curAllDone: '全部处理完毕', curStopped: '已停止',
@@ -126,6 +137,7 @@
             unitMin: '分钟', unitHour: '小时', unitDay: '天',
             unknownName: '未知游戏名', nameMissing: '（名称未记录）',
             processing: '处理中', queuePos: i => `排队第 ${i} 位`,
+            tailPos: i => `最后批次第 ${i} 位`,
             retryExtra: (a, m, e) => `待重试 · 失败 ${a}/${m} · ${e}`,
             gaveExtra: e => `已放弃 · ${e}`,
             emptyPending: '暂无。点击"仅扫描列表"或"开始清理"来读取待删除项目',
@@ -136,6 +148,9 @@
             errCode: c => `错误${c}`,
             resetDone: '记录已重置',
             coolCleared: '冷却已清除',
+            restoreDone: (a, n) => `已恢复 ${a} 个跳过项目（当前记录 ${n} 个）`,
+            restoreEmpty: '没有可恢复的备份',
+            prepLog: n => `已启用"跳过前 N 个"：先读取前 ${n} 个项目，它们将在最后删除`,
             startLog: (r, s) => `开始清理（累计已删 ${r}，已记录跳过 ${s}）`,
             stillCooling: c => `仍在上次的冷却期内，剩余 ${c}，先等待`,
             logWait: (l, s) => `${l}，约 ${s} 秒`,
@@ -165,13 +180,13 @@
         }
     };
 
-    // ===== Persistent state (survives page reloads) =====
     const STORE_KEY = 'steamLicenseCleanerState';
     const DEFAULTS = {
         skipped: [], removed: 0, minGap: 0,
         coolLevel: 0, cooldownUntil: 0,
         delaySec: CFG.delaySec, coolMin: CFG.coolMin,
-        skippedInfo: {},             // packageId -> name (for the Skipped tab)
+        skipFirst: 0,
+        skippedInfo: {},
         lang: 'en'
     };
     function loadState() {
@@ -185,9 +200,10 @@
         try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (e) {}
     }
     const state = loadState();
-    // clamp persisted values in case old data had out-of-range settings
     if (typeof state.coolMin !== 'number' || !(state.coolMin >= 1)) state.coolMin = CFG.coolMin;
     if (state.coolMin > 15) state.coolMin = 15;
+    if (typeof state.skipFirst !== 'number' || !(state.skipFirst >= 0)) state.skipFirst = 0;
+    state.skipFirst = Math.floor(state.skipFirst);
     const skipSet = new Set(state.skipped);
     if (!state.skippedInfo || typeof state.skippedInfo !== 'object') state.skippedInfo = {};
     if (!I18N[state.lang]) state.lang = 'en';
@@ -197,10 +213,9 @@
         return typeof v === 'function' ? v(...a) : v;
     };
 
-    // Deleted list is stored separately (it can get long); writes are throttled
     const DEL_KEY = 'steamLicenseCleanerDeleted';
     const DEL_MAX = 20000;
-    let deletedList = [];   // [packageId, name, timestamp], oldest first
+    let deletedList = [];
     try { deletedList = JSON.parse(localStorage.getItem(DEL_KEY)) || []; } catch (e) {}
     let delTimer = null;
     function saveDeleted() {
@@ -213,18 +228,26 @@
         if (!delTimer) delTimer = setTimeout(saveDeleted, 3000);
     }
 
-    // ===== Per-run state =====
+    const SKIP_BACKUP_KEY = 'steamLicenseCleanerSkippedBackup';
+    function loadSkipBackup() {
+        try {
+            const b = JSON.parse(localStorage.getItem(SKIP_BACKUP_KEY));
+            if (b && Array.isArray(b.skipped)) return b;
+        } catch (e) {}
+        return null;
+    }
+    let skipBackup = loadSkipBackup();
+
     const run = {
         running: false, scanning: false, last: '', ctl: null, current: '',
-        queue: [], cur: null,    // pending queue, item in flight
-        retry: new Map(),        // failed, waiting for retry: packageId -> item
-        gaveUp: new Map(),       // given up this run: packageId -> item
+        queue: [], cur: null, tail: [], preparing: false,
+        retry: new Map(),
+        gaveUp: new Map(),
         processed: 0, removedRun: 0, skippedRun: 0,
         startAt: 0, okStreak: 0, sinceLimit: 0, failStreak: [],
         wake: null, lockRelease: null
     };
 
-    // ===== Helpers =====
     const sleep = ms => new Promise(r => setTimeout(r, ms));
     const rand = ([min, max]) => Math.round(min + Math.random() * (max - min));
     const pad2 = n => String(n).padStart(2, '0');
@@ -240,7 +263,6 @@
         return h < 48 ? `${h.toFixed(1)} ${t('unitHour')}` : `${(h / 24).toFixed(1)} ${t('unitDay')}`;
     };
 
-    // ===== UI =====
     let els = null;
     const origTitle = document.title;
 
@@ -353,9 +375,11 @@
             <button class="slc-btn slc-red" data-k="stop" data-i18n="btn_stop" disabled></button>
             <button class="slc-btn slc-yellow" data-k="clearcool" data-i18n="btn_clearCool"></button>
             <button class="slc-btn slc-ghost" data-k="reset" data-i18n="btn_reset" data-i18n-title="tip_reset"></button>
+            <button class="slc-btn slc-ghost" data-k="restoreskip" data-i18n="btn_restoreSkip" data-i18n-title="tip_restoreSkip"></button>
             <div class="slc-set">
               <label><span data-i18n="set_delay_pre"></span> <input type="number" min="0.5" step="0.5" data-k="delay"> <span data-i18n="set_delay_post"></span></label>
               <label><span data-i18n="set_cool_pre"></span> <input type="number" min="1" max="15" step="1" data-k="coolmin"> <span data-i18n="set_cool_post"></span></label>
+              <label><span data-i18n="set_skip_pre"></span> <input type="number" min="0" step="1" data-k="skipfirst"> <span data-i18n="set_skip_post"></span></label>
             </div>
           </div>
           <div class="slc-tabs">
@@ -380,6 +404,7 @@
         els.filter.addEventListener('input', () => { view.sig = ''; render(); });
         els.scan.addEventListener('click', scanOnly);
         els.clearcool.addEventListener('click', clearCooldown);
+        els.restoreskip.addEventListener('click', restoreSkipped);
         els.lang.addEventListener('click', () => {
             state.lang = state.lang === 'zh' ? 'en' : 'zh';
             saveState();
@@ -390,6 +415,7 @@
 
         els.delay.value = state.delaySec;
         els.coolmin.value = state.coolMin;
+        els.skipfirst.value = state.skipFirst;
         els.delay.addEventListener('change', () => {
             const v = parseFloat(els.delay.value);
             state.delaySec = v >= 0.5 ? v : CFG.delaySec;
@@ -398,15 +424,29 @@
         });
         els.coolmin.addEventListener('change', () => {
             const v = parseFloat(els.coolmin.value);
-            // clamp to 1..15 minutes
             state.coolMin = Math.min(15, Math.max(1, isFinite(v) ? v : CFG.coolMin));
             els.coolmin.value = state.coolMin;
+            saveState();
+        });
+        els.skipfirst.addEventListener('change', () => {
+            const v = parseInt(els.skipfirst.value, 10);
+            state.skipFirst = Math.max(0, isFinite(v) ? v : 0);
+            els.skipfirst.value = state.skipFirst;
             saveState();
         });
         els.start.addEventListener('click', runCleaning);
         els.stop.addEventListener('click', stopCleaning);
         els.reset.addEventListener('click', () => {
             if (run.running) return;
+            if (!window.confirm(t('confirmReset'))) return;
+            try {
+                localStorage.setItem(SKIP_BACKUP_KEY, JSON.stringify({
+                    skipped: state.skipped.slice(),
+                    skippedInfo: Object.assign({}, state.skippedInfo),
+                    time: Date.now()
+                }));
+            } catch (e) {}
+            skipBackup = loadSkipBackup();
             state.skipped = []; skipSet.clear();
             state.removed = 0; state.minGap = 0; state.coolLevel = 0; state.cooldownUntil = 0;
             state.skippedInfo = {};
@@ -428,6 +468,31 @@
         state.coolLevel = 0;
         saveState();
         if (hadCooldown) log(t('coolCleared'), 'info');
+        view.sig = '';
+        render();
+    }
+
+    function restoreSkipped() {
+        if (run.running) return;
+        const b = loadSkipBackup();
+        if (!b || !Array.isArray(b.skipped) || !b.skipped.length) {
+            log(t('restoreEmpty'), 'warn');
+            return;
+        }
+        let added = 0;
+        for (const id of b.skipped) {
+            if (!skipSet.has(id)) {
+                skipSet.add(id);
+                state.skipped.push(id);
+                added++;
+            }
+            if (b.skippedInfo && b.skippedInfo[id] && !state.skippedInfo[id]) {
+                state.skippedInfo[id] = b.skippedInfo[id];
+            }
+        }
+        skipBackup = b;
+        saveState();
+        log(t('restoreDone', added, state.skipped.length), 'info');
         view.sig = '';
         render();
     }
@@ -457,7 +522,6 @@
         if (nearBottom) box.scrollTop = box.scrollHeight;
     }
 
-    // ===== Tabbed lists =====
     const view = { tab: 'log', sig: '' };
     const LIST_CAP = 300;
 
@@ -472,6 +536,9 @@
         if (tab === 'pending') {
             if (run.cur) rows.push({ id: run.cur.packageId, name: run.cur.itemName, extra: t('processing'), now: true });
             run.queue.forEach((g, i) => rows.push({ id: g.packageId, name: g.itemName, extra: t('queuePos', i + 1) }));
+            if (run.tail && run.tail.length) {
+                run.tail.forEach((g, i) => rows.push({ id: g.packageId, name: g.itemName, extra: t('tailPos', i + 1) }));
+            }
         } else if (tab === 'deleted') {
             for (let i = deletedList.length - 1; i >= 0; i--) {
                 const e = deletedList[i];
@@ -497,7 +564,7 @@
 
     function renderTabs() {
         const counts = {
-            pending: run.queue.length + (run.cur ? 1 : 0),
+            pending: run.queue.length + (run.cur ? 1 : 0) + (run.tail ? run.tail.length : 0),
             deleted: deletedList.length,
             skipped: state.skipped.length,
             failed: run.retry.size + run.gaveUp.size
@@ -517,7 +584,7 @@
 
         const q = els.filter.value.trim().toLowerCase();
         const token = {
-            pending: `${run.queue.length}|${run.queue[0] ? run.queue[0].packageId : ''}|${run.cur ? run.cur.packageId : ''}`,
+            pending: `${run.queue.length}|${run.queue[0] ? run.queue[0].packageId : ''}|${run.cur ? run.cur.packageId : ''}|${run.tail ? run.tail.length : 0}`,
             deleted: deletedList.length,
             skipped: state.skipped.length,
             failed: `${run.retry.size}|${run.gaveUp.size}|${[...run.retry.values()].reduce((a, g) => a + g.attempts, 0)}`
@@ -584,6 +651,7 @@
         els.bar.style.width = pct.toFixed(1) + '%';
 
         if (run.scanning) els.cur.textContent = t('curScanning', ctl ? ctl.pages : 0, ctl ? ctl.total : 0);
+        else if (run.running && run.preparing) els.cur.textContent = t('curPreparing');
         else if (run.running && run.current) els.cur.textContent = t('curProcessing', run.current);
         else if (!run.running && run.last === 'scanned') els.cur.textContent = t('curScanDone', ctl ? ctl.total : 0);
         else if (!run.running && run.last) els.cur.textContent = run.last === 'done' ? t('curAllDone') : t('curStopped');
@@ -611,13 +679,13 @@
         els.stop.disabled = !run.running;
         els.reset.disabled = run.running;
         els.clearcool.disabled = left <= 0;
+        els.restoreskip.disabled = run.running || !skipBackup || !skipBackup.skipped || !skipBackup.skipped.length;
         renderTabs();
 
         document.title = run.running && ctl && ctl.total
             ? `[${ctl.finished}/${ctl.total}] ${origTitle}` : origTitle;
     }
 
-    // ===== Waiting (interruptible by Stop) =====
     async function waitInterruptible(ms, label) {
         const end = Date.now() + ms;
         if (label && ms > 10000) log(t('logWait', label, Math.round(ms / 1000)), 'info');
@@ -628,7 +696,6 @@
         return run.running;
     }
 
-    // If we're inside a cooldown, wait it out; false = stopped meanwhile
     async function honorCooldown() {
         while (run.running) {
             const left = state.cooldownUntil - Date.now();
@@ -638,7 +705,6 @@
         return false;
     }
 
-    // ===== Reading pages =====
     function parseRemovable(doc) {
         const games = [];
         doc.querySelectorAll('.account_table tr').forEach(row => {
@@ -719,7 +785,6 @@
         }
     }
 
-    // ===== Deleting =====
     async function removeGame(packageId) {
         try {
             const response = await fetch('https://store.steampowered.com/account/removelicense', {
@@ -737,15 +802,12 @@
         }
     }
 
-    // Cooldown: level 1 = coolMin (default 5 min), +1 min per level, hard cap 15 min.
-    // Jitter is applied first, then the result is clamped to [coolMin, 15 min].
     function triggerCooldown(reason) {
         state.coolLevel = Math.min(state.coolLevel + 1, 15);
         const startMin = Math.min(15, Math.max(1, state.coolMin || CFG.coolMin));
         const minutes = Math.min(15, startMin + (state.coolLevel - 1) * CFG.coolStepMin);
         let dur = minutes * 60000;
         dur *= 1 + (Math.random() * 2 - 1) * CFG.coolJitter;
-        // clamp: startMin .. 15 min
         dur = Math.min(CFG.coolMax, Math.max(startMin * 60000, dur));
         state.cooldownUntil = Date.now() + dur;
         state.minGap = Math.min(CFG.gapMax, Math.max(CFG.gapFirst, Math.round(state.minGap * CFG.gapGrowth)));
@@ -768,7 +830,6 @@
         }
     }
 
-    // Returns 'removed' | 'skipped' | 'deferred' | 'gaveup' | 'stop'
     async function attemptInner(g, ctl) {
         while (run.running) {
             if (!(await honorCooldown())) return 'stop';
@@ -798,8 +859,6 @@
             }
 
             if (res.code === 84) {
-                // Rate limiting is global, so another item won't help: after the cooldown
-                // try the same item again as the probe.
                 triggerCooldown(t('reason84'));
                 continue;
             }
@@ -810,14 +869,12 @@
                 return 'stop';
             }
 
-            // Any other failure: move on, retry at the end
             g.attempts = (g.attempts || 0) + 1;
             g.lastErr = res.error;
             run.okStreak = 0;
             run.failStreak.push(g);
 
             if (run.failStreak.length >= CFG.breakerAfter) {
-                // Several failures in a row looks like throttling: don't count them against the items
                 run.failStreak.forEach(x => { x.attempts = Math.max(0, x.attempts - 1); });
                 run.failStreak = [];
                 run.retry.set(g.packageId, g);
@@ -858,7 +915,6 @@
         await waitInterruptible(ms);
     }
 
-    // ===== Keep awake (best effort) =====
     async function keepAwake(on) {
         try {
             if (on) {
@@ -880,7 +936,6 @@
         if (run.running) { e.preventDefault(); e.returnValue = ''; }
     });
 
-    // ===== Main flow =====
     async function runCleaning() {
         if (run.running) return;
         run.running = true;
@@ -890,6 +945,8 @@
         run.okStreak = 0; run.sinceLimit = 0; run.failStreak = [];
         run.retry.clear();
         run.gaveUp.clear();
+        run.tail = [];
+        run.preparing = false;
         keepAwake(true);
 
         log(t('startLog', state.removed, state.skipped.length), 'info');
@@ -906,14 +963,32 @@
                 const queue = run.queue = [];
                 const ctl = { readerDone: false, total: 0, finished: 0, pages: 0 };
                 run.ctl = ctl;
+                run.tail = [];
+                run.preparing = false;
                 readerTask(queue, ctl);
 
-                // Phase 1: delete while reading; failures go to the retry list
+                const skipN = Math.max(0, Math.floor(Number(state.skipFirst) || 0));
+                if (skipN > 0) {
+                    log(t('prepLog', skipN), 'info');
+                    run.preparing = true;
+                    while (run.running && queue.length < skipN && !ctl.readerDone) {
+                        await sleep(100);
+                    }
+                    run.preparing = false;
+                    if (queue.length > 0) {
+                        run.tail = queue.splice(0, Math.min(skipN, queue.length));
+                    }
+                }
+
                 while (run.running) {
                     if (!queue.length) {
-                        if (ctl.readerDone) break;
-                        await sleep(300);
-                        continue;
+                        if (!ctl.readerDone) { await sleep(300); continue; }
+                        if (run.tail.length) {
+                            queue.push(...run.tail);
+                            run.tail = [];
+                            continue;
+                        }
+                        break;
                     }
                     const g = queue.shift();
                     const r = await attempt(g, ctl);
@@ -921,7 +996,6 @@
                     await pace(r);
                 }
 
-                // Phase 2: retry everything that failed earlier
                 let pass = 0;
                 while (run.running && run.retry.size) {
                     pass++;
@@ -946,6 +1020,8 @@
 
         run.last = finishedAll ? 'done' : 'stopped';
         run.running = false;
+        run.preparing = false;
+        run.tail = [];
         keepAwake(false);
         saveState();
         saveDeleted();
@@ -958,13 +1034,13 @@
         render();
     }
 
-    // Read all pages only (no deleting)
     async function scanOnly() {
         if (run.running) return;
         run.running = true;
         run.scanning = true;
         run.last = '';
         run.queue = [];
+        run.tail = [];
         const ctl = { readerDone: false, total: 0, finished: 0, pages: 0 };
         run.ctl = ctl;
         log(t('scanStart'), 'info');
@@ -987,7 +1063,6 @@
         log(t('stopReq'), 'info');
     }
 
-    // ===== Start =====
     function waitForPage() {
         return new Promise(resolve => {
             if (document.querySelector('.page_content > h2')) return resolve();
