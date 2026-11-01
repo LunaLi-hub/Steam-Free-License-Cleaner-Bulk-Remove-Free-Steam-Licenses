@@ -52,8 +52,3 @@ Bulk-remove free licenses from your own Steam account — free games, free DLC, 
 | HTTP 429 | 与错误 84 相同，触发限流 | 按错误 84 处理 | 同错误 84 |
 | 其他 / 未知 | 临时网络或服务器错误 | 先跳过，本轮结束时统一重试（最多 3 次） | 让它继续跑；若持续失败，检查网络 |
 
----
-
-## License · 许可
-
-MIT
