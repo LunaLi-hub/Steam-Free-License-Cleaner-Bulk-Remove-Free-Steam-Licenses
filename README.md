@@ -8,9 +8,10 @@ Clean up your Steam library by removing unwanted free games, DLCs, soundtracks, 
 
 [Greasy Fork](https://greasyfork.org/zh-CN/scripts/603249-steam-free-license-cleaner) · [GitHub Repository](https://github.com/Lunalulunana/Steam-Free-License-Cleaner-Bulk-Remove-Free-Steam-Licenses)
 
----
-![Steam Free License Cleaner](https://raw.githubusercontent.com/Lunalulunana/Steam-Free-License-Cleaner-Bulk-Remove-Free-Steam-Licenses/main/assets/Screenshot.png)
 
+## Screenshot
+![Steam Free License Cleaner](https://raw.githubusercontent.com/Lunalulunana/Steam-Free-License-Cleaner-Bulk-Remove-Free-Steam-Licenses/main/assets/Screenshot.png)
+---
 ## Language / 语言
 
 - [English](#english)
@@ -81,6 +82,9 @@ Install one of the following browser extensions:
 **Recommended:** Install directly from Greasy Fork.
 
 [Install Steam Free License Cleaner](https://greasyfork.org/zh-CN/scripts/603249-steam-free-license-cleaner)
+
+
+Hint: Successful installation does not necessarily mean the script is running. In Tampermonkey, make sure the extension is enabled, the script itself is enabled, and the extension is allowed to run on Steam.
 
 You can also browse the source code and project updates on GitHub:
 
@@ -231,6 +235,8 @@ Use it at your own risk.
 
 [安装 Steam Free License Cleaner](https://greasyfork.org/zh-CN/scripts/603249-steam-free-license-cleaner)
 
+提示： 脚本安装成功不代表已经正常运行。请确认 Tampermonkey 扩展已启用、脚本本身已启用，并且允许该扩展在 Steam 页面运行。
+
 你也可以前往 GitHub 查看源代码和项目更新：
 
 [GitHub 项目仓库](https://github.com/Lunalulunana/Steam-Free-License-Cleaner-Bulk-Remove-Free-Steam-Licenses)
@@ -315,12 +321,3 @@ https://store.steampowered.com/account/licenses/
 使用本脚本所产生的风险由使用者自行承担。
 
 ---
-
-## Project Information
-
-- **Project:** Steam Free License Cleaner
-- **Type:** Userscript
-- **Platform:** Steam
-- **Greasy Fork:** [Script Page](https://greasyfork.org/zh-CN/scripts/603249-steam-free-license-cleaner)
-- **GitHub:** [Source Code](https://github.com/Lunalulunana/Steam-Free-License-Cleaner-Bulk-Remove-Free-Steam-Licenses)
-- **License:** See [LICENSE](LICENSE) for details.
