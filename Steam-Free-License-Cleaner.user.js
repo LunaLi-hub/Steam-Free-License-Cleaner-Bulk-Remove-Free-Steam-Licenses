@@ -1,11 +1,11 @@
 // ==UserScript==
 // @name         Steam-Free-License-Cleaner
 // @name:zh-CN   Steam 免费游戏批量删除 / 一键清库存脚本
-// @namespace    https://github.com/Lunalulunana/Steam-Free-License-Cleaner-Bulk-Remove-Free-Steam-Licenses
-// @version      1.0
-// @description  Selectable filter bar (category chips + checkboxes + select all/invert/clear), quick-clean buttons (Demo/Trial, Soundtrack, DLC, Tool), multi-language demo detector, risk banner and delete confirmation. Only checked items are removed.
-// @description:zh-CN  可勾选筛选栏（分类标签＋复选框＋全选/反选/清空），快捷清理按钮（试用版/原声/DLC/工具），多语言试用版识别，首页风险提示与删除确认。只删除勾选的项目。
-// @author       luna + Claude + deepseek
+// @namespace    https://github.com/LunaLi-hub/Steam-Free-License-Cleaner-Bulk-Remove-Free-Steam-Licenses
+// @version      1.1
+// @description  Selectable filter bar (category chips + checkboxes + select all/invert/clear), quick-clean buttons (Demo/Trial, Soundtrack, DLC, Tool), multi-language demo detector, risk banner and delete confirmation, ETA with finish time, clear-log button. Only checked items are removed.
+// @description:zh-CN  可勾选筛选栏（分类标签＋复选框＋全选/反选/清空），快捷清理按钮（试用版/原声/DLC/工具），多语言试用版识别，首页风险提示与删除确认，预计剩余时间与完成时刻，日志清理按钮。只删除勾选的项目。
+// @author       luna
 // @match        https://store.steampowered.com/account/licenses/*
 // @grant        none
 // @license      MIT
@@ -104,9 +104,11 @@
             btn_start: 'Start cleaning', btn_scan: 'Scan list only', btn_stop: 'Stop', btn_reset: 'Reset records',
             btn_clearCool: 'Clear cooldown',
             btn_restoreSkip: 'Restore skipped list',
+            btn_clearLog: 'Clear log',
             tip_scan: 'Read every page and list the removable items without deleting anything',
             tip_reset: 'Clear the skipped list, totals, deleted list and cooldown state',
             tip_restoreSkip: 'Restore the skipped (error 29) list that was backed up when you last reset records',
+            tip_clearLog: 'Empty the log panel (records, totals and lists are not affected)',
             confirmReset: 'Reset all records?\n\nThis clears the skipped list, totals, deleted list and cooldown state. The skipped list is backed up first, so you can bring it back later with the "Restore skipped list" button.',
             confirmDelete: 'This cannot be undone. You may accidentally remove a game you want to keep.\n\nMost games can be re-added by searching the Steam store, but delisted games cannot be re-added, and some games are no longer available in certain regions.',
             set_delay_pre: 'Base delay', set_delay_post: 'sec',
@@ -121,7 +123,8 @@
             curProcessing: n => `Processing: ${n}`,
             curScanDone: n => `Scan complete, ${n} pending`,
             curAllDone: 'All done', curStopped: 'Stopped',
-            eta: s => `About ${s} left`, etaReading: ' (still reading pages)',
+            eta: (dur, at) => `About ${dur} left, done around ${at}`,
+            etaReading: ' (still reading pages)',
             coolBar: (c, l, r) => `Rate-limit cooldown, <b>${c}</b> left · level ${l}` +
                 (r ? ' — no delete requests are sent during cooldown' : ' — it will wait for the cooldown to end after you press Start'),
             unitMin: 'min', unitHour: 'h', unitDay: 'd',
@@ -193,9 +196,11 @@
             btn_start: '开始清理', btn_scan: '仅扫描列表', btn_stop: '停止', btn_reset: '重置记录',
             btn_clearCool: '清除冷却',
             btn_restoreSkip: '恢复跳过列表',
+            btn_clearLog: '清理日志',
             tip_scan: '只读取所有分页并列出待删除项目，不执行删除',
             tip_reset: '清除已跳过列表、累计计数、已删除列表和冷却状态',
             tip_restoreSkip: '恢复上次重置记录时备份的“错误29已跳过”列表',
+            tip_clearLog: '清空日志面板（不影响记录、计数和各列表）',
             confirmReset: '确定要重置所有记录吗？\n\n将清除已跳过列表、累计计数、已删除列表和冷却状态。已跳过列表会先备份，之后可用“恢复跳过列表”按钮找回。',
             confirmDelete: '此操作不可逆，可能误删想保留的游戏。\n\n大部分游戏可在商店搜索重新添加，但已下架的游戏无法重新入库，部分游戏也不再支持某些地区。',
             set_delay_pre: '基础间隔', set_delay_post: '秒',
@@ -210,7 +215,8 @@
             curProcessing: n => `正在处理：${n}`,
             curScanDone: n => `扫描完成，共 ${n} 个待删除`,
             curAllDone: '全部处理完毕', curStopped: '已停止',
-            eta: s => `预计剩余约 ${s}`, etaReading: '（仍在读取分页）',
+            eta: (dur, at) => `预计还需 ${dur}，约 ${at} 完成`,
+            etaReading: '（仍在读取分页）',
             coolBar: (c, l, r) => `限流冷却中，剩余 <b>${c}</b>　·　第 ${l} 级` +
                 (r ? '，冷却期间不会发送任何删除请求' : '，点击开始后会先等冷却结束'),
             unitMin: '分钟', unitHour: '小时', unitDay: '天',
@@ -353,11 +359,22 @@
         const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
         return h > 0 ? `${h}:${pad2(m)}:${pad2(sec)}` : `${pad2(m)}:${pad2(sec)}`;
     };
-    const fmtEta = ms => {
-        const m = Math.round(ms / 60000);
-        if (m < 60) return `${Math.max(1, m)} ${t('unitMin')}`;
-        const h = m / 60;
-        return h < 48 ? `${h.toFixed(1)} ${t('unitHour')}` : `${(h / 24).toFixed(1)} ${t('unitDay')}`;
+    // 预计剩余时长：天 / 小时 / 分钟
+    const fmtDhm = ms => {
+        const total = Math.max(1, Math.ceil(ms / 60000));
+        const d = Math.floor(total / 1440);
+        const h = Math.floor((total % 1440) / 60);
+        const m = total % 60;
+        const parts = [];
+        if (d) parts.push(`${d}${t('unitDay')}`);
+        if (d || h) parts.push(`${h}${t('unitHour')}`);
+        parts.push(`${m}${t('unitMin')}`);
+        return parts.join(' ');
+    };
+    // 预计完成的具体日期时间
+    const fmtAt = ms => {
+        const d = new Date(Date.now() + ms);
+        return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
     };
 
     let els = null;
@@ -388,6 +405,7 @@
     #slc .slc-bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,#1a9fff,#67c1f5);transition:width .4s}
     #slc .slc-meta{display:flex;justify-content:space-between;gap:12px;margin-top:7px;font-size:12px;color:#8f98a0}
     #slc .slc-meta span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    #slc .slc-meta span:last-child{flex-shrink:0;max-width:60%;text-align:right;white-space:normal;font-variant-numeric:tabular-nums}
     #slc .slc-cool{margin:10px 16px 0;padding:8px 12px;background:rgba(255,200,44,.08);border-left:3px solid #ffc82c;color:#ffc82c;font-size:12px}
     #slc .slc-cool b{font-weight:600;font-variant-numeric:tabular-nums}
     #slc .slc-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:14px 16px}
@@ -400,6 +418,8 @@
     #slc .slc-quickbtn.q-demo:hover{background:rgba(164,208,7,.28);color:#fff}
     #slc .slc-quickbtn.q-sound{color:#c5a3ff;border-color:rgba(152,110,255,.4);background:rgba(152,110,255,.1)}
     #slc .slc-quickbtn.q-sound:hover{background:rgba(152,110,255,.28);color:#fff}
+    #slc .slc-quickbtn.q-dlc{color:#ff9f7a;border-color:rgba(255,130,80,.4);background:rgba(255,130,80,.1)}
+    #slc .slc-quickbtn.q-dlc:hover{background:rgba(255,130,80,.28);color:#fff}
     #slc .slc-quickbtn.q-tool{color:#ffc82c;border-color:rgba(255,200,44,.4);background:rgba(255,200,44,.1)}
     #slc .slc-quickbtn.q-tool:hover{background:rgba(255,200,44,.28);color:#fff}
     #slc .slc-btn{border:0;border-radius:2px;padding:0 16px;line-height:30px;font-size:13px;cursor:pointer;font-family:inherit;transition:filter .15s}
@@ -454,7 +474,7 @@
     #slc .slc-empty,#slc .slc-more{padding:18px 16px;color:#56707f;text-align:center}
     #slc .slc-list::-webkit-scrollbar{width:8px}
     #slc .slc-list::-webkit-scrollbar-thumb{background:rgba(103,193,245,.25);border-radius:4px}
-    @media (max-width:640px){#slc .slc-stats{grid-template-columns:repeat(2,1fr)}#slc .slc-set{margin-left:0}#slc .slc-row{grid-template-columns:minmax(0,1fr) 120px}#slc .slc-row .i{display:none}#slc .slc-row.sel{grid-template-columns:24px minmax(0,1fr) 120px}#slc .slc-filter{margin-left:0;width:100%}}
+    @media (max-width:640px){#slc .slc-stats{grid-template-columns:repeat(2,1fr)}#slc .slc-set{margin-left:0}#slc .slc-row{grid-template-columns:minmax(0,1fr) 120px}#slc .slc-row .i{display:none}#slc .slc-row.sel{grid-template-columns:24px minmax(0,1fr) 120px}#slc .slc-filter{margin-left:0;width:100%}#slc .slc-meta{flex-direction:column;gap:3px}#slc .slc-meta span:last-child{max-width:100%;text-align:left}}
     `;
 
     function buildUI() {
@@ -471,7 +491,7 @@
           <div class="slc-head">
             <div class="slc-title">
               <svg viewBox="0 0 24 24"><path d="M9 3h6l1 2h4v2H4V5h4l1-2zm-3 6h12l-1 12H7L6 9zm4 2v8h1.5v-8H10zm3.5 0v8H15v-8h-1.5z"/></svg>
-              <span data-i18n="title"></span><em>v1.0</em>
+              <span data-i18n="title"></span><em>v1.1</em>
             </div>
             <div class="slc-headr">
               <button class="slc-lang" data-k="lang" title="English / 中文"></button>
@@ -495,6 +515,7 @@
             <button class="slc-btn slc-ghost" data-k="scan" data-i18n="btn_scan" data-i18n-title="tip_scan"></button>
             <button class="slc-btn slc-red" data-k="stop" data-i18n="btn_stop" disabled></button>
             <button class="slc-btn slc-yellow" data-k="clearcool" data-i18n="btn_clearCool"></button>
+            <button class="slc-btn slc-ghost" data-k="clearlog" data-i18n="btn_clearLog" data-i18n-title="tip_clearLog"></button>
             <button class="slc-btn slc-ghost" data-k="reset" data-i18n="btn_reset" data-i18n-title="tip_reset"></button>
             <button class="slc-btn slc-ghost" data-k="restoreskip" data-i18n="btn_restoreSkip" data-i18n-title="tip_restoreSkip"></button>
             <div class="slc-set">
@@ -541,6 +562,7 @@
         els.filter.addEventListener('input', () => { view.sig = ''; render(); });
         els.scan.addEventListener('click', scanOnly);
         els.clearcool.addEventListener('click', clearCooldown);
+        els.clearlog.addEventListener('click', clearLog);
         els.restoreskip.addEventListener('click', restoreSkipped);
         els.selall.addEventListener('click', () => selectAll(true));
         els.selnone.addEventListener('click', () => selectAll(false));
@@ -678,6 +700,13 @@
         if (hadCooldown) log(t('coolCleared'), 'info');
         view.sig = '';
         render();
+    }
+
+    // 清空日志面板；运行中也可使用，不影响任何记录
+    function clearLog() {
+        if (!els || !els.log) return;
+        els.log.textContent = '';
+        els.log.scrollTop = 0;
     }
 
     function restoreSkipped() {
@@ -935,7 +964,8 @@
         let eta = '';
         if (run.running && !run.scanning && run.processed >= 5 && remain > 0) {
             const per = (Date.now() - run.startAt) / run.processed;
-            eta = t('eta', fmtEta(per * remain));
+            const ms = per * remain + left;
+            eta = t('eta', fmtDhm(ms), fmtAt(ms));
             if (ctl && !ctl.readerDone) eta += (state.lang === 'zh' ? '' : ' ') + t('etaReading');
         } else if (ctl && ctl.total && !run.scanning && run.last !== 'scanned') {
             eta = `${ctl.finished} / ${ctl.total}`;
@@ -1318,6 +1348,10 @@
         run.running = false;
         run.preparing = false;
         run.tail = [];
+        // 清理结束后丢弃过期的扫描列表与勾选状态，避免下次误用旧勾选
+        run.scanList = [];
+        run.allowedSet = null;
+        view.sig = '';
         keepAwake(false);
         saveState();
         saveDeleted();
