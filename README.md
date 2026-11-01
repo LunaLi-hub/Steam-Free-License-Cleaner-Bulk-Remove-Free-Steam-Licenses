@@ -17,7 +17,7 @@ Bulk-remove free licenses from your own Steam account — free games, free DLC, 
 4. Open https://store.steampowered.com/account/licenses/
 5. In the panel, click **Scan list only** to preview, then **Start cleaning**
 
-[⬆️ Back to top](#en)
+
 
 ---
 
@@ -30,7 +30,6 @@ Bulk-remove free licenses from your own Steam account — free games, free DLC, 
 4. 打开 https://store.steampowered.com/account/licenses/
 5. 面板里点 **仅扫描列表** 预览，再点 **开始清理**
 
-[⬆️ 回到顶部](#zh)
 
 ---
 
