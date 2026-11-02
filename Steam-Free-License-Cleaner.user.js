@@ -2,13 +2,15 @@
 // @name         Steam-Free-License-Cleaner
 // @name:zh-CN   Steam 免费游戏批量删除 / 一键清库存脚本
 // @namespace    https://github.com/LunaLi-hub/Steam-Free-License-Cleaner-Bulk-Remove-Free-Steam-Licenses
-// @version      1.1
-// @description  Selectable filter bar (category chips + checkboxes + select all/invert/clear), quick-clean buttons (Demo/Trial, Soundtrack, DLC, Tool), multi-language demo detector, risk banner and delete confirmation, ETA with finish time, clear-log button. Only checked items are removed.
-// @description:zh-CN  可勾选筛选栏（分类标签＋复选框＋全选/反选/清空），快捷清理按钮（试用版/原声/DLC/工具），多语言试用版识别，首页风险提示与删除确认，预计剩余时间与完成时刻，日志清理按钮。只删除勾选的项目。
+// @version      2.0
+// @description  Selectable filter bar (category chips + checkboxes + select all/invert/clear), quick-clean buttons (Demo/Trailer, Soundtrack, DLC, Tool), "Skip Free Weekend" button, multi-language demo detector, risk banner and delete confirmation, ETA with finish time, clear-log button. Only checked items are removed.
+// @description:zh-CN  可勾选筛选栏（分类标签＋复选框＋全选/反选/清空），快捷清理按钮（试玩/预告/原声/DLC/工具），“跳过免费周末”按钮，多语言试用版识别，首页风险提示与删除确认，预计剩余时间与完成时刻，日志清理按钮。只删除勾选的项目。
 // @author       luna
 // @match        https://store.steampowered.com/account/licenses/*
 // @grant        none
 // @license      MIT
+// @downloadURL https://update.greasyfork.org/scripts/603249/Steam-Free-License-Cleaner.user.js
+// @updateURL https://update.greasyfork.org/scripts/603249/Steam-Free-License-Cleaner.meta.js
 // ==/UserScript==
 
 (function () {
@@ -18,7 +20,8 @@
         delaySec: 2,
         coolMin: 5,
         coolStepMin: 1,
-        coolMax: 15 * 60000,
+        coolMaxMin: 20,
+        coolMaxLimit: 180,
         coolJitter: 0.1,
         coolDecayAfter: 20,
         gapFirst: 3000,
@@ -35,6 +38,9 @@
         maxPages: 3000
     };
 
+    // 名称包含 Free Weekend（含中文常见译名）的项目
+    const FREE_WEEKEND_RE = /free\s*weekend|免费周末|免費週末/i;
+
     const CAT_DEFS = [
         {
             id: 'demo',
@@ -44,7 +50,8 @@
                 /试[玩用]/, /体验版?|體驗版?/, /序章/, /测试版?|測試版?/, /预览版?|預覽版?/,
                 /体験版?/, /お試し/, /체험판/, /데모/, /프롤로그/,
                 /демо/i, /пробн/i, /пролог/i,
-                /demostración/i, /démo/i
+                /demostración/i, /démo/i,
+                /\btrailers?\b/i, /预告片?|預告片?/, /予告編?/, /트레일러/, /трейлер/i, /\btráiler\b/i, /\bbande-annonce\b/i
             ]
         },
         {
@@ -103,17 +110,20 @@
             notStarted: 'Not started',
             btn_start: 'Start cleaning', btn_scan: 'Scan list only', btn_stop: 'Stop', btn_reset: 'Reset records',
             btn_clearCool: 'Clear cooldown',
-            btn_restoreSkip: 'Restore skipped list',
+            btn_restoreSkip: 'Restore all records',
             btn_clearLog: 'Clear log',
+            btn_skipFW: 'Skip Free Weekend',
             tip_scan: 'Read every page and list the removable items without deleting anything',
             tip_reset: 'Clear the skipped list, totals, deleted list and cooldown state',
-            tip_restoreSkip: 'Restore the skipped (error 29) list that was backed up when you last reset records',
+            tip_restoreSkip: 'Restore everything backed up when you last reset records: skipped list, removed total, deleted list and cooldown state',
             tip_clearLog: 'Empty the log panel (records, totals and lists are not affected)',
-            confirmReset: 'Reset all records?\n\nThis clears the skipped list, totals, deleted list and cooldown state. The skipped list is backed up first, so you can bring it back later with the "Restore skipped list" button.',
+            tip_skipFW: 'Add every item whose name contains "Free Weekend" to the skipped list so it is never deleted (these usually fail with error 29)',
+            confirmReset: 'Reset all records?\n\nThis clears the skipped list, totals, deleted list and cooldown state. Everything is backed up first, so you can bring it back later with the "Restore all records" button.',
             confirmDelete: 'This cannot be undone. You may accidentally remove a game you want to keep.\n\nMost games can be re-added by searching the Steam store, but delisted games cannot be re-added, and some games are no longer available in certain regions.',
             set_delay_pre: 'Base delay', set_delay_post: 'sec',
-            set_cool_pre: 'First cooldown', set_cool_post: 'min (+1 each, max 15)',
-            set_skip_pre: 'Skip first', set_skip_post: 'items (deleted last)',
+            set_cool_pre: 'First cooldown', set_cool_post: 'min (+1 each)',
+            set_coolmax_pre: 'Max cooldown', set_coolmax_post: 'min',
+            set_skip_pre: 'Protect newest', set_skip_post: 'items (never deleted)',
             tab_log: 'Log', tab_pending: 'Pending', tab_deleted: 'Deleted', tab_skipped: 'Skipped', tab_failed: 'Failed',
             filterPh: 'Search name or ID',
             b_idle: 'Idle', b_run: 'Running', b_cool: 'Cooling down', b_done: 'Done',
@@ -141,9 +151,11 @@
             errCode: c => `Error ${c}`,
             resetDone: 'Records reset',
             coolCleared: 'Cooldown cleared',
-            restoreDone: (a, n) => `Restored ${a} skipped items (${n} on record)`,
+            restoreDone: (a, n, r, d) => `Restored all records: ${a} skipped items added (${n} on record), removed total +${r}, ${d} deleted-list entries`,
             restoreEmpty: 'No backup to restore',
-            prepLog: n => `Skip-first is on: reading the first ${n} items first, they will be deleted last`,
+            prepLog: n => `Protect-newest is on: the ${n} newest items will not be deleted`,
+            protectedLog: n => `Protected ${n} newest item(s), they are not deleted`,
+            scanProtected: n => `Protect-newest: the ${n} newest item(s) were left unchecked (you can still check them manually)`,
             startLog: (r, s) => `Started (total removed ${r}, skipped on record ${s})`,
             startLogChecked: n => `Started with ${n} checked items`,
             stillCooling: c => `Still inside the previous cooldown, ${c} left. Waiting first.`,
@@ -154,7 +166,7 @@
             readDone: (p, n) => `Finished reading ${p} pages, ${n} removable found`,
             reason84: 'Error 84: rate limited',
             reasonBreaker: (n, e) => `${n} failures in a row (${e}), probably rate limited`,
-            coolLog: (r, ok, d, l, g) => `${r} (${ok} successes before this). Cooling down ${d} (level ${l}, +1 min per level, max 15 min); extra delay per deletion is now ${g}s`,
+            coolLog: (r, ok, d, l, g) => `${r} (${ok} successes before this). Cooling down ${d} (level ${l}, +1 min per level); extra delay per deletion is now ${g}s`,
             okLog: (n, id) => `✓ ${n} (${id}) deleted`,
             skipLog: (n, id) => `- ${n} (${id}) error 29, skipped for good`,
             err24: 'Error 24: login session expired. Refresh the page or sign in again, then press Start.',
@@ -172,20 +184,36 @@
             scanStopped: 'Scan stopped',
             scanErr: m => `Scan error: ${m}`,
             scanSwitched: 'Switched to "Pending" tab — check items, then press "Start cleaning".',
-            cat_demo: 'Demo/Trial', cat_soundtrack: 'Soundtrack', cat_dlc: 'DLC',
+            cat_demo: 'Demo/Trailer', cat_soundtrack: 'Soundtrack', cat_dlc: 'DLC',
             cat_tool: 'Tool', cat_game: 'Game',
             sel_info: (a, b) => `${a} / ${b} selected`,
             sel_all: 'Select all', sel_inv: 'Invert', sel_none: 'Clear',
             noSelection: 'Nothing selected — pick at least one item.',
             q_label: 'Quick clean:',
-            q_demo: 'Only Demo/Trial',
+            q_demo: 'Only Demo/Trailer',
             q_soundtrack: 'Only Soundtrack',
             q_dlc: 'Only DLC',
             q_tool: 'Only Tool',
             quickScanning: 'Quick clean: scanning first...',
             quickNoItems: 'Quick clean: no removable items found.',
             quickNone: c => `Quick clean: no "${c}" items.`,
-            quickStart: (n, c) => `Quick clean: starting with ${n} "${c}" item(s).`
+            quickStart: (n, c) => `Quick clean: starting with ${n} "${c}" item(s).`,
+            skipFWScanning: 'Skip Free Weekend: scanning first...',
+            skipFWNoItems: 'Skip Free Weekend: no removable items found.',
+            skipFWNone: 'Skip Free Weekend: no "Free Weekend" items in the list.',
+            skipFWDone: (n, total) => `Skip Free Weekend: added ${n} item(s) to the skipped list (${total} on record). They will not be deleted.`,
+            sel_skip: 'Add checked to skip',
+            tip_skipSel: 'Add all checked items to the skipped list so they are never deleted, and remove them from this list',
+            skipSelNone: 'Add to skip: nothing checked.',
+            skipSelDone: (n, total) => `Added ${n} checked item(s) to the skipped list (${total} on record). They will not be deleted.`,
+            showAll: n => `Show all ${n}`,
+            showLess: c => `Show first ${c} only`,
+            sel_unskip: 'Move checked to pending',
+            tip_unskipSel: 'Remove the checked items from the skipped list and put them back into the pending-deletion list',
+            unskipNone: 'Move to pending: nothing checked.',
+            unskipDone: (n, total) => `Moved ${n} item(s) out of the skipped list into pending (${total} pending in total). Check the Pending tab.`,
+            unskipScanning: n => `Removed ${n} item(s) from the skipped list. Scanning to rebuild the pending list...`,
+            usingScan: n => `Using the earlier scan result (${n} items), no need to re-read the pages`
         },
         zh: {
             title: '库存清理器',
@@ -195,17 +223,20 @@
             notStarted: '尚未开始',
             btn_start: '开始清理', btn_scan: '仅扫描列表', btn_stop: '停止', btn_reset: '重置记录',
             btn_clearCool: '清除冷却',
-            btn_restoreSkip: '恢复跳过列表',
+            btn_restoreSkip: '恢复全部记录',
             btn_clearLog: '清理日志',
+            btn_skipFW: '跳过免费周末',
             tip_scan: '只读取所有分页并列出待删除项目，不执行删除',
             tip_reset: '清除已跳过列表、累计计数、已删除列表和冷却状态',
-            tip_restoreSkip: '恢复上次重置记录时备份的“错误29已跳过”列表',
+            tip_restoreSkip: '恢复上次重置记录时备份的全部内容：已跳过列表、累计删除数、已删除列表和冷却状态',
             tip_clearLog: '清空日志面板（不影响记录、计数和各列表）',
-            confirmReset: '确定要重置所有记录吗？\n\n将清除已跳过列表、累计计数、已删除列表和冷却状态。已跳过列表会先备份，之后可用“恢复跳过列表”按钮找回。',
+            tip_skipFW: '将名称包含 “Free Weekend” 的项目全部加入跳过列表，不再删除（免费周末入库的项目大概率触发错误29）',
+            confirmReset: '确定要重置所有记录吗？\n\n将清除已跳过列表、累计计数、已删除列表和冷却状态。所有记录会先备份，之后可用“恢复全部记录”按钮找回。',
             confirmDelete: '此操作不可逆，可能误删想保留的游戏。\n\n大部分游戏可在商店搜索重新添加，但已下架的游戏无法重新入库，部分游戏也不再支持某些地区。',
             set_delay_pre: '基础间隔', set_delay_post: '秒',
-            set_cool_pre: '首次冷却', set_cool_post: '分钟（每次+1，最多15）',
-            set_skip_pre: '跳过前', set_skip_post: '个（最后删除）',
+            set_cool_pre: '首次冷却', set_cool_post: '分钟（每次+1）',
+            set_coolmax_pre: '最长冷却', set_coolmax_post: '分钟',
+            set_skip_pre: '保护最新', set_skip_post: '个（不删除）',
             tab_log: '日志', tab_pending: '待删除', tab_deleted: '已删除', tab_skipped: '已跳过', tab_failed: '失败',
             filterPh: '搜索名称或 ID',
             b_idle: '空闲', b_run: '运行中', b_cool: '冷却中', b_done: '已完成',
@@ -233,9 +264,11 @@
             errCode: c => `错误${c}`,
             resetDone: '记录已重置',
             coolCleared: '冷却已清除',
-            restoreDone: (a, n) => `已恢复 ${a} 个跳过项目（当前记录 ${n} 个）`,
+            restoreDone: (a, n, r, d) => `已恢复全部记录：新增 ${a} 个跳过项目（当前记录 ${n} 个），累计删除数 +${r}，已删除列表 ${d} 条`,
             restoreEmpty: '没有可恢复的备份',
-            prepLog: n => `已启用"跳过前 N 个"：先读取前 ${n} 个项目，它们将在最后删除`,
+            prepLog: n => `已启用"保护最新 N 个"：最新入库的 ${n} 个项目不会被删除`,
+            protectedLog: n => `已保护最新的 ${n} 个项目，不会被删除`,
+            scanProtected: n => `保护最新：最新的 ${n} 个项目已自动取消勾选（仍可手动勾选）`,
             startLog: (r, s) => `开始清理（累计已删 ${r}，已记录跳过 ${s}）`,
             startLogChecked: n => `开始清理，仅处理已勾选的 ${n} 个项目`,
             stillCooling: c => `仍在上次的冷却期内，剩余 ${c}，先等待`,
@@ -246,7 +279,7 @@
             readDone: (p, n) => `分页读取结束，共 ${p} 页，发现可删 ${n} 个`,
             reason84: '错误84，触发限流',
             reasonBreaker: (n, e) => `连续失败 ${n} 次（${e}），疑似限流`,
-            coolLog: (r, ok, d, l, g) => `${r}（此前连续成功 ${ok} 个）。冷却 ${d}（第 ${l} 级，每次+1分钟，最多15分钟），之后每次删除额外间隔 ${g} 秒`,
+            coolLog: (r, ok, d, l, g) => `${r}（此前连续成功 ${ok} 个）。冷却 ${d}（第 ${l} 级，每次+1分钟），之后每次删除额外间隔 ${g} 秒`,
             okLog: (n, id) => `✓ ${n}（${id}）已删除`,
             skipLog: (n, id) => `- ${n}（${id}）错误29，已永久跳过`,
             err24: '错误24：登录会话已失效，请刷新页面或重新登录后再开始',
@@ -264,20 +297,36 @@
             scanStopped: '扫描已停止',
             scanErr: m => `扫描异常：${m}`,
             scanSwitched: '已切换到「待删除」页，勾选项目后点「开始清理」。',
-            cat_demo: '试用版', cat_soundtrack: '原声', cat_dlc: 'DLC',
+            cat_demo: '试玩/预告', cat_soundtrack: '原声', cat_dlc: 'DLC',
             cat_tool: '工具', cat_game: '游戏',
             sel_info: (a, b) => `已选 ${a} / ${b}`,
             sel_all: '全选', sel_inv: '反选', sel_none: '清空',
             noSelection: '没有选中任何项目——请至少勾选一项。',
             q_label: '快捷清理：',
-            q_demo: '仅删试用版',
+            q_demo: '仅删试玩/预告',
             q_soundtrack: '仅删原声',
             q_dlc: '仅删 DLC',
             q_tool: '仅删工具',
             quickScanning: '快捷清理：先扫描列表...',
             quickNoItems: '快捷清理：未找到可删除项目。',
             quickNone: c => `快捷清理：没有「${c}」类项目。`,
-            quickStart: (n, c) => `快捷清理：开始处理「${c}」共 ${n} 项。`
+            quickStart: (n, c) => `快捷清理：开始处理「${c}」共 ${n} 项。`,
+            skipFWScanning: '跳过免费周末：先扫描列表...',
+            skipFWNoItems: '跳过免费周末：未找到可删除项目。',
+            skipFWNone: '跳过免费周末：列表中没有包含 Free Weekend 的项目。',
+            skipFWDone: (n, total) => `跳过免费周末：已将 ${n} 个项目加入跳过列表（当前记录 ${total} 个），不会被删除。`,
+            sel_skip: '勾选项加入跳过',
+            tip_skipSel: '将所有勾选项加入跳过列表（永不删除），并从当前列表中移除',
+            skipSelNone: '加入跳过：没有勾选任何项目。',
+            skipSelDone: (n, total) => `已将勾选的 ${n} 个项目加入跳过列表（当前记录 ${total} 个），不会被删除。`,
+            showAll: n => `显示全部 ${n} 条`,
+            showLess: c => `只显示前 ${c} 条`,
+            sel_unskip: '勾选项放入待删除',
+            tip_unskipSel: '将勾选的项目从跳过列表移除，并放回待删除列表',
+            unskipNone: '放入待删除：没有勾选任何项目。',
+            unskipDone: (n, total) => `已将 ${n} 个项目移出跳过列表并放入待删除（待删除共 ${total} 个），请到「待删除」页签查看。`,
+            unskipScanning: n => `已将 ${n} 个项目移出跳过列表，正在扫描以重建待删除列表...`,
+            usingScan: n => `使用之前的扫描结果（${n} 个），无需重新读取分页`
         }
     };
 
@@ -285,7 +334,7 @@
     const DEFAULTS = {
         skipped: [], removed: 0, minGap: 0,
         coolLevel: 0, cooldownUntil: 0,
-        delaySec: CFG.delaySec, coolMin: CFG.coolMin,
+        delaySec: CFG.delaySec, coolMin: CFG.coolMin, coolMaxMin: CFG.coolMaxMin,
         skipFirst: 0,
         skippedInfo: {},
         lang: 'en'
@@ -302,7 +351,9 @@
     }
     const state = loadState();
     if (typeof state.coolMin !== 'number' || !(state.coolMin >= 1)) state.coolMin = CFG.coolMin;
-    if (state.coolMin > 15) state.coolMin = 15;
+    if (typeof state.coolMaxMin !== 'number' || !(state.coolMaxMin >= 1)) state.coolMaxMin = CFG.coolMaxMin;
+    if (state.coolMaxMin > CFG.coolMaxLimit) state.coolMaxMin = CFG.coolMaxLimit;
+    if (state.coolMin > state.coolMaxMin) state.coolMin = state.coolMaxMin;
     if (typeof state.skipFirst !== 'number' || !(state.skipFirst >= 0)) state.skipFirst = 0;
     state.skipFirst = Math.floor(state.skipFirst);
     const skipSet = new Set(state.skipped);
@@ -472,6 +523,8 @@
     #slc .slc-row .x.bad{color:#e0605e}
     #slc .slc-row.now .n{color:#a4d007}
     #slc .slc-empty,#slc .slc-more{padding:18px 16px;color:#56707f;text-align:center}
+    #slc .slc-morebtn{border:1px solid rgba(103,193,245,.3);background:rgba(103,193,245,.1);color:#67c1f5;border-radius:2px;padding:3px 12px;font-size:12px;cursor:pointer;font-family:inherit;margin-left:6px}
+    #slc .slc-morebtn:hover{background:rgba(103,193,245,.25);color:#fff}
     #slc .slc-list::-webkit-scrollbar{width:8px}
     #slc .slc-list::-webkit-scrollbar-thumb{background:rgba(103,193,245,.25);border-radius:4px}
     @media (max-width:640px){#slc .slc-stats{grid-template-columns:repeat(2,1fr)}#slc .slc-set{margin-left:0}#slc .slc-row{grid-template-columns:minmax(0,1fr) 120px}#slc .slc-row .i{display:none}#slc .slc-row.sel{grid-template-columns:24px minmax(0,1fr) 120px}#slc .slc-filter{margin-left:0;width:100%}#slc .slc-meta{flex-direction:column;gap:3px}#slc .slc-meta span:last-child{max-width:100%;text-align:left}}
@@ -491,7 +544,7 @@
           <div class="slc-head">
             <div class="slc-title">
               <svg viewBox="0 0 24 24"><path d="M9 3h6l1 2h4v2H4V5h4l1-2zm-3 6h12l-1 12H7L6 9zm4 2v8h1.5v-8H10zm3.5 0v8H15v-8h-1.5z"/></svg>
-              <span data-i18n="title"></span><em>v1.1</em>
+              <span data-i18n="title"></span><em>v2.0</em>
             </div>
             <div class="slc-headr">
               <button class="slc-lang" data-k="lang" title="English / 中文"></button>
@@ -515,14 +568,16 @@
             <button class="slc-btn slc-ghost" data-k="scan" data-i18n="btn_scan" data-i18n-title="tip_scan"></button>
             <button class="slc-btn slc-red" data-k="stop" data-i18n="btn_stop" disabled></button>
             <button class="slc-btn slc-yellow" data-k="clearcool" data-i18n="btn_clearCool"></button>
-            <button class="slc-btn slc-ghost" data-k="clearlog" data-i18n="btn_clearLog" data-i18n-title="tip_clearLog"></button>
             <button class="slc-btn slc-ghost" data-k="reset" data-i18n="btn_reset" data-i18n-title="tip_reset"></button>
             <button class="slc-btn slc-ghost" data-k="restoreskip" data-i18n="btn_restoreSkip" data-i18n-title="tip_restoreSkip"></button>
+            <button class="slc-btn slc-yellow" data-k="skipfw" data-i18n="btn_skipFW" data-i18n-title="tip_skipFW"></button>
             <div class="slc-set">
               <label><span data-i18n="set_delay_pre"></span> <input type="number" min="0.5" step="0.5" data-k="delay"> <span data-i18n="set_delay_post"></span></label>
-              <label><span data-i18n="set_cool_pre"></span> <input type="number" min="1" max="15" step="1" data-k="coolmin"> <span data-i18n="set_cool_post"></span></label>
+              <label><span data-i18n="set_cool_pre"></span> <input type="number" min="1" step="1" data-k="coolmin"> <span data-i18n="set_cool_post"></span></label>
+              <label><span data-i18n="set_coolmax_pre"></span> <input type="number" min="1" max="180" step="1" data-k="coolmax"> <span data-i18n="set_coolmax_post"></span></label>
               <label><span data-i18n="set_skip_pre"></span> <input type="number" min="0" step="1" data-k="skipfirst"> <span data-i18n="set_skip_post"></span></label>
             </div>
+            <button class="slc-btn slc-ghost" data-k="clearlog" data-i18n="btn_clearLog" data-i18n-title="tip_clearLog"></button>
           </div>
           <div class="slc-quickbar">
             <span class="slc-quicklabel" data-i18n="q_label"></span>
@@ -545,6 +600,8 @@
               <button data-k="selall" data-i18n="sel_all"></button>
               <button data-k="selinv" data-i18n="sel_inv"></button>
               <button data-k="selnone" data-i18n="sel_none"></button>
+              <button data-k="skipsel" data-i18n="sel_skip" data-i18n-title="tip_skipSel"></button>
+              <button data-k="unskipsel" data-i18n="sel_unskip" data-i18n-title="tip_unskipSel" hidden></button>
               <span class="slc-selinfo" data-k="selinfo"></span>
             </div>
           </div>
@@ -564,9 +621,12 @@
         els.clearcool.addEventListener('click', clearCooldown);
         els.clearlog.addEventListener('click', clearLog);
         els.restoreskip.addEventListener('click', restoreSkipped);
+        els.skipfw.addEventListener('click', skipFreeWeekend);
         els.selall.addEventListener('click', () => selectAll(true));
         els.selnone.addEventListener('click', () => selectAll(false));
         els.selinv.addEventListener('click', invertSel);
+        els.skipsel.addEventListener('click', skipChecked);
+        els.unskipsel.addEventListener('click', unskipChecked);
         els.qDemo.addEventListener('click', () => quickClean('demo'));
         els.qSound.addEventListener('click', () => quickClean('soundtrack'));
         els.qDlc.addEventListener('click', () => quickClean('dlc'));
@@ -581,6 +641,7 @@
 
         els.delay.value = state.delaySec;
         els.coolmin.value = state.coolMin;
+        els.coolmax.value = state.coolMaxMin;
         els.skipfirst.value = state.skipFirst;
         els.delay.addEventListener('change', () => {
             const v = parseFloat(els.delay.value);
@@ -590,8 +651,18 @@
         });
         els.coolmin.addEventListener('change', () => {
             const v = parseFloat(els.coolmin.value);
-            state.coolMin = Math.min(15, Math.max(1, isFinite(v) ? v : CFG.coolMin));
+            state.coolMin = Math.min(state.coolMaxMin, Math.max(1, isFinite(v) ? v : CFG.coolMin));
             els.coolmin.value = state.coolMin;
+            saveState();
+        });
+        els.coolmax.addEventListener('change', () => {
+            const v = parseFloat(els.coolmax.value);
+            state.coolMaxMin = Math.min(CFG.coolMaxLimit, Math.max(1, isFinite(v) ? v : CFG.coolMaxMin));
+            els.coolmax.value = state.coolMaxMin;
+            if (state.coolMin > state.coolMaxMin) {
+                state.coolMin = state.coolMaxMin;
+                els.coolmin.value = state.coolMin;
+            }
             saveState();
         });
         els.skipfirst.addEventListener('change', () => {
@@ -605,13 +676,28 @@
         els.reset.addEventListener('click', () => {
             if (run.running) return;
             if (!window.confirm(t('confirmReset'))) return;
-            try {
-                localStorage.setItem(SKIP_BACKUP_KEY, JSON.stringify({
+            // 有内容才备份，避免连续重置两次把有效备份覆盖成空的
+            if (state.skipped.length || state.removed > 0 || deletedList.length) {
+                const snap = {
                     skipped: state.skipped.slice(),
                     skippedInfo: Object.assign({}, state.skippedInfo),
+                    removed: state.removed,
+                    minGap: state.minGap,
+                    coolLevel: state.coolLevel,
+                    cooldownUntil: state.cooldownUntil,
+                    deleted: deletedList.slice(),
                     time: Date.now()
-                }));
-            } catch (e) {}
+                };
+                try {
+                    localStorage.setItem(SKIP_BACKUP_KEY, JSON.stringify(snap));
+                } catch (e) {
+                    // 存储空间不足时，放弃已删除列表，只备份其余内容
+                    try {
+                        snap.deleted = [];
+                        localStorage.setItem(SKIP_BACKUP_KEY, JSON.stringify(snap));
+                    } catch (e2) {}
+                }
+            }
             skipBackup = loadSkipBackup();
             state.skipped = []; skipSet.clear();
             state.removed = 0; state.minGap = 0; state.coolLevel = 0; state.cooldownUntil = 0;
@@ -628,16 +714,96 @@
         render();
     }
 
+    // 搜索框有内容时，全选/反选/清空只作用于当前搜索匹配的项目
+    function matchText(name, id) {
+        const q = els && els.filter ? els.filter.value.trim().toLowerCase() : '';
+        return !q || String(name).toLowerCase().includes(q) || String(id).includes(q);
+    }
+    function matchesFilter(g) { return matchText(g.itemName, g.packageId); }
+    function skippedFiltered() { return state.skipped.filter(id => matchText(state.skippedInfo[id] || '', id)); }
+
     function selectAll(checked) {
-        if (run.running || !run.scanList.length) return;
-        run.scanList.forEach(g => { g.checked = checked; });
+        if (run.running) return;
+        if (view.tab === 'skipped') {
+            skippedFiltered().forEach(id => { if (checked) view.skipSel.add(id); else view.skipSel.delete(id); });
+        } else {
+            if (!run.scanList.length) return;
+            run.scanList.forEach(g => { if (matchesFilter(g)) g.checked = checked; });
+        }
         view.sig = '';
         render();
     }
 
     function invertSel() {
+        if (run.running) return;
+        if (view.tab === 'skipped') {
+            skippedFiltered().forEach(id => { if (view.skipSel.has(id)) view.skipSel.delete(id); else view.skipSel.add(id); });
+        } else {
+            if (!run.scanList.length) return;
+            run.scanList.forEach(g => { if (matchesFilter(g)) g.checked = !g.checked; });
+        }
+        view.sig = '';
+        render();
+    }
+
+    // 将"已跳过"页签中勾选的项目移出跳过列表，放回待删除列表
+    async function unskipChecked() {
+        if (run.running) return;
+        const ids = state.skipped.filter(id => view.skipSel.has(id));
+        if (!ids.length) {
+            log(t('unskipNone'), 'warn');
+            return;
+        }
+        const restored = ids.map(id => {
+            const name = state.skippedInfo[id] || t('unknownName');
+            skipSet.delete(id);
+            delete state.skippedInfo[id];
+            return { packageId: id, itemName: name, attempts: 0, cats: categorize(name), checked: true };
+        });
+        const idSet = new Set(ids);
+        state.skipped = state.skipped.filter(id => !idSet.has(id));
+        view.skipSel.clear();
+        saveState();
+
+        if (run.scanList.length) {
+            const have = new Set(run.scanList.map(g => g.packageId));
+            restored.forEach(g => { if (!have.has(g.packageId)) run.scanList.push(g); });
+            log(t('unskipDone', ids.length, run.scanList.length), 'ok');
+            view.tab = 'pending';
+            view.sig = '';
+            render();
+        } else {
+            log(t('unskipScanning', ids.length), 'info');
+            view.sig = '';
+            render();
+            await scanOnly();
+        }
+    }
+
+    // 将勾选的项目加入跳过列表（永不删除），并从当前扫描列表中移除
+    function skipChecked() {
         if (run.running || !run.scanList.length) return;
-        run.scanList.forEach(g => { g.checked = !g.checked; });
+        let added = 0;
+        const keep = [];
+        for (const g of run.scanList) {
+            if (g.checked) {
+                if (!skipSet.has(g.packageId)) {
+                    skipSet.add(g.packageId);
+                    state.skipped.push(g.packageId);
+                }
+                state.skippedInfo[g.packageId] = g.itemName;
+                added++;
+            } else {
+                keep.push(g);
+            }
+        }
+        if (!added) {
+            log(t('skipSelNone'), 'warn');
+            return;
+        }
+        run.scanList = keep;
+        saveState();
+        log(t('skipSelDone', added, state.skipped.length), 'ok');
         view.sig = '';
         render();
     }
@@ -651,6 +817,12 @@
 
     function updateSelInfo() {
         if (!els || !els.selinfo) return;
+        if (view.tab === 'skipped') {
+            let n = 0;
+            for (const id of state.skipped) if (view.skipSel.has(id)) n++;
+            els.selinfo.textContent = t('sel_info', n, state.skipped.length);
+            return;
+        }
         if (!run.scanList.length) { els.selinfo.textContent = ''; return; }
         let sel = 0;
         for (const g of run.scanList) if (g.checked) sel++;
@@ -669,7 +841,7 @@
         }
         let count = 0;
         run.scanList.forEach(g => {
-            g.checked = g.cats.includes(cat);
+            g.checked = !g.protected && g.cats.includes(cat);
             if (g.checked) count++;
         });
         if (!count) {
@@ -692,6 +864,42 @@
         await runCleaning(true);
     }
 
+    // 将名称包含 Free Weekend 的项目加入跳过列表（永久不删除）
+    async function skipFreeWeekend() {
+        if (run.running) return;
+        if (!run.scanList.length) {
+            log(t('skipFWScanning'), 'info');
+            await scanOnly();
+            if (!run.scanList.length) {
+                log(t('skipFWNoItems'), 'warn');
+                return;
+            }
+        }
+        let added = 0;
+        const keep = [];
+        for (const g of run.scanList) {
+            if (FREE_WEEKEND_RE.test(g.itemName)) {
+                if (!skipSet.has(g.packageId)) {
+                    skipSet.add(g.packageId);
+                    state.skipped.push(g.packageId);
+                }
+                state.skippedInfo[g.packageId] = g.itemName;
+                added++;
+            } else {
+                keep.push(g);
+            }
+        }
+        if (!added) {
+            log(t('skipFWNone'), 'warn');
+            return;
+        }
+        run.scanList = keep;
+        saveState();
+        log(t('skipFWDone', added, state.skipped.length), 'ok');
+        view.sig = '';
+        render();
+    }
+
     function clearCooldown() {
         const hadCooldown = state.cooldownUntil > Date.now();
         state.cooldownUntil = 0;
@@ -709,15 +917,19 @@
         els.log.scrollTop = 0;
     }
 
+    function backupHasContent(b) {
+        return !!b && !!((b.skipped && b.skipped.length) || b.removed > 0 || (b.deleted && b.deleted.length));
+    }
+
     function restoreSkipped() {
         if (run.running) return;
         const b = loadSkipBackup();
-        if (!b || !Array.isArray(b.skipped) || !b.skipped.length) {
+        if (!backupHasContent(b)) {
             log(t('restoreEmpty'), 'warn');
             return;
         }
         let added = 0;
-        for (const id of b.skipped) {
+        for (const id of (b.skipped || [])) {
             if (!skipSet.has(id)) {
                 skipSet.add(id);
                 state.skipped.push(id);
@@ -727,9 +939,28 @@
                 state.skippedInfo[id] = b.skippedInfo[id];
             }
         }
-        skipBackup = b;
+        // 累计删除数：加回备份的数量
+        const r = Number(b.removed) > 0 ? Math.floor(Number(b.removed)) : 0;
+        state.removed += r;
+        // 已删除列表：合并（按 ID+时间去重），备份的放在前面
+        let d = 0;
+        if (Array.isArray(b.deleted) && b.deleted.length) {
+            const have = new Set(deletedList.map(e => e[0] + '|' + e[2]));
+            const add = b.deleted.filter(e => !have.has(e[0] + '|' + e[2]));
+            deletedList = add.concat(deletedList);
+            if (deletedList.length > DEL_MAX) deletedList.splice(0, deletedList.length - DEL_MAX);
+            d = add.length;
+            saveDeleted();
+        }
+        // 冷却状态：取较大值（更保守）
+        state.minGap = Math.max(state.minGap || 0, Number(b.minGap) || 0);
+        state.coolLevel = Math.max(state.coolLevel || 0, Number(b.coolLevel) || 0);
+        state.cooldownUntil = Math.max(state.cooldownUntil || 0, Number(b.cooldownUntil) || 0);
+        // 恢复后删除备份，防止重复点击导致累计数被重复加回
+        try { localStorage.removeItem(SKIP_BACKUP_KEY); } catch (e) {}
+        skipBackup = null;
         saveState();
-        log(t('restoreDone', added, state.skipped.length), 'info');
+        log(t('restoreDone', added, state.skipped.length, r, d), 'info');
         view.sig = '';
         render();
     }
@@ -759,7 +990,7 @@
         if (nearBottom) box.scrollTop = box.scrollHeight;
     }
 
-    const view = { tab: 'log', sig: '' };
+    const view = { tab: 'log', sig: '', showAll: false, skipSel: new Set() };
     const LIST_CAP = 300;
 
     function fmtWhen(ts) {
@@ -798,7 +1029,10 @@
         } else if (tab === 'skipped') {
             for (let i = state.skipped.length - 1; i >= 0; i--) {
                 const id = state.skipped[i];
-                rows.push({ id, name: state.skippedInfo[id] || t('nameMissing'), extra: t('errCode', 29) });
+                rows.push({
+                    id, name: state.skippedInfo[id] || t('nameMissing'), extra: t('errCode', 29),
+                    selectable: !run.running, skipId: id, checked: view.skipSel.has(id)
+                });
             }
         } else if (tab === 'failed') {
             run.retry.forEach(g => rows.push({
@@ -815,9 +1049,14 @@
 
     function renderSelbar() {
         if (!els || !els.selbar) return;
-        const show = view.tab === 'pending' && !run.running && run.scanList.length > 0;
+        const pendingMode = view.tab === 'pending' && !run.running && run.scanList.length > 0;
+        const skippedMode = view.tab === 'skipped' && !run.running && state.skipped.length > 0;
+        const show = pendingMode || skippedMode;
         els.selbar.hidden = !show;
         if (!show) return;
+        els.cats.hidden = !pendingMode;
+        els.skipsel.hidden = !pendingMode;
+        els.unskipsel.hidden = !skippedMode;
         updateSelInfo();
     }
 
@@ -858,7 +1097,7 @@
             return;
         }
         const frag = document.createDocumentFragment();
-        rows.slice(0, LIST_CAP).forEach(r => {
+        (view.showAll ? rows : rows.slice(0, LIST_CAP)).forEach(r => {
             const row = document.createElement('div');
             row.className = 'slc-row' + (r.now ? ' now' : '') + (r.selectable ? ' sel' : '');
             if (r.selectable) {
@@ -866,8 +1105,12 @@
                 cb.type = 'checkbox';
                 cb.checked = r.checked;
                 cb.addEventListener('change', () => {
-                    const g = run.scanList[r.idx];
-                    if (g) g.checked = cb.checked;
+                    if (r.skipId !== undefined) {
+                        if (cb.checked) view.skipSel.add(r.skipId); else view.skipSel.delete(r.skipId);
+                    } else {
+                        const g = run.scanList[r.idx];
+                        if (g) g.checked = cb.checked;
+                    }
                     updateSelInfo();
                 });
                 row.appendChild(cb);
@@ -881,8 +1124,15 @@
         if (rows.length > LIST_CAP) {
             const m = document.createElement('div');
             m.className = 'slc-more';
-            m.textContent = t('more', rows.length, LIST_CAP);
-            frag.appendChild(m);
+            if (!view.showAll) m.textContent = t('more', rows.length, LIST_CAP) + ' ';
+            const b = document.createElement('button');
+            b.className = 'slc-morebtn';
+            b.textContent = view.showAll ? t('showLess', LIST_CAP) : t('showAll', rows.length);
+            b.addEventListener('click', () => { view.showAll = !view.showAll; view.sig = ''; render(); });
+            m.appendChild(b);
+            // 展开全部后按钮放在顶部，方便收起
+            if (view.showAll) frag.insertBefore(m, frag.firstChild);
+            else frag.appendChild(m);
         }
         box.appendChild(frag);
         box.scrollTop = top;
@@ -921,7 +1171,7 @@
             skipped: state.skipped.length,
             failed: `${run.retry.size}|${run.gaveUp.size}|${[...run.retry.values()].reduce((a, g) => a + g.attempts, 0)}`
         }[view.tab];
-        const sig = `${state.lang}|${view.tab}|${q}|${token}`;
+        const sig = `${state.lang}|${view.tab}|${q}|${view.showAll}|${token}`;
         if (sig === view.sig) return;
         view.sig = sig;
 
@@ -957,7 +1207,7 @@
         if (run.scanning) els.cur.textContent = t('curScanning', ctl ? ctl.pages : 0, ctl ? ctl.total : 0);
         else if (run.running && run.preparing) els.cur.textContent = t('curPreparing');
         else if (run.running && run.current) els.cur.textContent = t('curProcessing', run.current);
-        else if (!run.running && run.last === 'scanned') els.cur.textContent = t('curScanDone', ctl ? ctl.total : 0);
+        else if (!run.running && run.last === 'scanned') els.cur.textContent = t('curScanDone', run.scanList.length);
         else if (!run.running && run.last) els.cur.textContent = run.last === 'done' ? t('curAllDone') : t('curStopped');
         else els.cur.textContent = t('notStarted');
 
@@ -984,7 +1234,8 @@
         els.stop.disabled = !run.running;
         els.reset.disabled = run.running;
         els.clearcool.disabled = left <= 0;
-        els.restoreskip.disabled = run.running || !skipBackup || !skipBackup.skipped || !skipBackup.skipped.length;
+        els.restoreskip.disabled = run.running || !backupHasContent(skipBackup);
+        els.skipfw.disabled = run.running;
         els.qDemo.disabled = run.running;
         els.qSound.disabled = run.running;
         els.qDlc.disabled = run.running;
@@ -1115,12 +1366,13 @@
     }
 
     function triggerCooldown(reason) {
-        state.coolLevel = Math.min(state.coolLevel + 1, 15);
-        const startMin = Math.min(15, Math.max(1, state.coolMin || CFG.coolMin));
-        const minutes = Math.min(15, startMin + (state.coolLevel - 1) * CFG.coolStepMin);
+        const maxMin = Math.max(1, state.coolMaxMin || CFG.coolMaxMin);
+        state.coolLevel = Math.min(state.coolLevel + 1, maxMin);
+        const startMin = Math.min(maxMin, Math.max(1, state.coolMin || CFG.coolMin));
+        const minutes = Math.min(maxMin, startMin + (state.coolLevel - 1) * CFG.coolStepMin);
         let dur = minutes * 60000;
         dur *= 1 + (Math.random() * 2 - 1) * CFG.coolJitter;
-        dur = Math.min(CFG.coolMax, Math.max(startMin * 60000, dur));
+        dur = Math.min(maxMin * 60000, Math.max(startMin * 60000, dur));
         state.cooldownUntil = Date.now() + dur;
         state.minGap = Math.min(CFG.gapMax, Math.max(CFG.gapFirst, Math.round(state.minGap * CFG.gapGrowth)));
         saveState();
@@ -1252,6 +1504,7 @@
         if (run.running) return;
 
         let allowedSet = null;
+        let preQueue = null;
         if (run.scanList.length) {
             const checked = run.scanList.filter(g => g.checked);
             if (!checked.length) {
@@ -1259,6 +1512,8 @@
                 return;
             }
             allowedSet = new Set(checked.map(g => g.packageId));
+            // 已有扫描结果：第一轮直接用它作队列，不再重新读取分页
+            preQueue = checked.map(g => Object.assign({}, g, { attempts: 0, lastErr: '' }));
         }
         if (!skipConfirm && !window.confirm(t('confirmDelete'))) return;
         run.allowedSet = allowedSet;
@@ -1286,24 +1541,29 @@
             while (run.running) {
                 round++;
                 if (round > 1) log(t('rescan', round), 'info');
-                const queue = run.queue = [];
-                const ctl = { readerDone: false, total: 0, finished: 0, pages: 0 };
+                const usePre = round === 1 && preQueue && preQueue.length > 0;
+                const queue = run.queue = usePre ? preQueue.slice() : [];
+                const ctl = usePre
+                    ? { readerDone: true, total: queue.length, finished: 0, pages: 0 }
+                    : { readerDone: false, total: 0, finished: 0, pages: 0 };
                 run.ctl = ctl;
                 run.tail = [];
                 run.preparing = false;
-                readerTask(queue, ctl);
+                if (usePre) log(t('usingScan', queue.length), 'info');
+                else readerTask(queue, ctl);
 
-                const skipN = Math.max(0, Math.floor(Number(state.skipFirst) || 0));
-                if (skipN > 0) {
-                    log(t('prepLog', skipN), 'info');
+                // 保护最新 N 个：仅用于未扫描直接清理的情况（扫描后改由自动取消勾选实现）
+                const protectN = allowedSet ? 0 : Math.max(0, Math.floor(Number(state.skipFirst) || 0));
+                if (protectN > 0) {
+                    log(t('prepLog', protectN), 'info');
                     run.preparing = true;
-                    while (run.running && queue.length < skipN && !ctl.readerDone) {
+                    while (run.running && queue.length < protectN && !ctl.readerDone) {
                         await sleep(100);
                     }
                     run.preparing = false;
-                    if (queue.length > 0) {
-                        run.tail = queue.splice(0, Math.min(skipN, queue.length));
-                    }
+                    const prot = queue.splice(0, Math.min(protectN, queue.length));
+                    ctl.total -= prot.length;
+                    if (prot.length) log(t('protectedLog', prot.length), 'info');
                 }
 
                 while (run.running) {
@@ -1384,6 +1644,16 @@
         const completed = run.running;
         run.scanList = run.queue.slice();
         run.queue = [];
+        // 保护最新 N 个：扫描完成后自动取消勾选列表最前面的 N 个
+        if (completed) {
+            const pn = Math.max(0, Math.floor(Number(state.skipFirst) || 0));
+            const pc = Math.min(pn, run.scanList.length);
+            for (let i = 0; i < pc; i++) {
+                run.scanList[i].checked = false;
+                run.scanList[i].protected = true;
+            }
+            if (pc > 0) log(t('scanProtected', pc), 'info');
+        }
         run.last = completed ? 'scanned' : 'stopped';
         run.running = false;
         run.scanning = false;
