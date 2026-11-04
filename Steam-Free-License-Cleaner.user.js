@@ -1,10 +1,10 @@
 // ==UserScript==
-// @name         Steam-Free-License-Cleaner
+// @name         Steam-Free-License-Cleaner-Bulk-Remove-Free-Steam-Licenses
 // @name:zh-CN   Steam 免费游戏批量删除 / 一键清库存脚本
 // @namespace    https://github.com/LunaLi-hub/Steam-Free-License-Cleaner-Bulk-Remove-Free-Steam-Licenses
-// @version      2.0
-// @description  Selectable filter bar (category chips + checkboxes + select all/invert/clear), quick-clean buttons (Demo/Trailer, Soundtrack, DLC, Tool), "Skip Free Weekend" button, multi-language demo detector, risk banner and delete confirmation, ETA with finish time, clear-log button. Only checked items are removed.
-// @description:zh-CN  可勾选筛选栏（分类标签＋复选框＋全选/反选/清空），快捷清理按钮（试玩/预告/原声/DLC/工具），“跳过免费周末”按钮，多语言试用版识别，首页风险提示与删除确认，预计剩余时间与完成时刻，日志清理按钮。只删除勾选的项目。
+// @version      2.5
+// @description  Selectable filter bar, combined filter by category / acquisition method / date range, quick-clean buttons, "Skip Free Weekend", non-removable license tracking with its own method/date filter, risk banner, ETA from start, clear-log. Only checked items are removed.
+// @description:zh-CN  可勾选筛选栏，分类/获取方式/日期区间组合筛选，快捷清理按钮，“跳过免费周末”，不可移除授权归类且支持获取方式/日期筛选，风险提示与删除确认，开始删除即显示预计时间，日志清理。只删除勾选的项目。
 // @author       luna
 // @match        https://store.steampowered.com/account/licenses/*
 // @grant        none
@@ -18,87 +18,64 @@
 
     const CFG = {
         delaySec: 2,
-        coolMin: 5,
-        coolStepMin: 1,
-        coolMaxMin: 20,
-        coolMaxLimit: 180,
-        coolJitter: 0.1,
-        coolDecayAfter: 20,
-        gapFirst: 3000,
-        gapGrowth: 1.5,
-        gapMax: 60000,
-        gapDecayAfter: 25,
-        gapDecay: 0.85,
-        failDelay: [3000, 6000],
-        breakerAfter: 4,
-        maxAttempts: 3,
-        retryPassWait: 30000,
-        netRetryDelay: [5000, 10000],
-        pageFetchDelay: [800, 1800],
-        maxPages: 3000
+        coolMin: 5, coolStepMin: 1, coolMaxMin: 20, coolMaxLimit: 180,
+        coolJitter: 0.1, coolDecayAfter: 20,
+        gapFirst: 3000, gapGrowth: 1.5, gapMax: 60000, gapDecayAfter: 25, gapDecay: 0.85,
+        failDelay: [3000, 6000], breakerAfter: 4, maxAttempts: 3,
+        retryPassWait: 30000, netRetryDelay: [5000, 10000],
+        pageFetchDelay: [800, 1800], maxPages: 3000
     };
 
-    // 名称包含 Free Weekend（含中文常见译名）的项目
     const FREE_WEEKEND_RE = /free\s*weekend|免费周末|免費週末/i;
 
     const CAT_DEFS = [
-        {
-            id: 'demo',
-            res: [
-                /\bdemo\b/i, /\btrial\b/i, /\bbeta\b/i, /\bplaytest\b/i, /\bpreview\b/i,
-                /\bprologue\b/i, /\bprolog\b/i,
-                /试[玩用]/, /体验版?|體驗版?/, /序章/, /测试版?|測試版?/, /预览版?|預覽版?/,
-                /体験版?/, /お試し/, /체험판/, /데모/, /프롤로그/,
-                /демо/i, /пробн/i, /пролог/i,
-                /demostración/i, /démo/i,
-                /\btrailers?\b/i, /预告片?|預告片?/, /予告編?/, /트레일러/, /трейлер/i, /\btráiler\b/i, /\bbande-annonce\b/i
-            ]
-        },
-        {
-            id: 'soundtrack',
-            res: [
-                /\bsoundtrack\b/i, /\bsound\s+track\b/i, /\bost\b/i,
-                /\boriginal\s+(?:game\s+)?soundtrack\b/i,
-                /原声带?|原聲帶?/, /音乐包|音樂包/, /音轨|音軌/, /配乐|配樂/, /音乐集|音樂集/,
-                /サウンドトラック/, /サントラ/,
-                /사운드트랙/, /오리지널\s*사운드/,
-                /саундтрек/i, /партитура/i,
-                /banda\s+sonora/i, /colonna\s+sonora/i
-            ]
-        },
-        {
-            id: 'dlc',
-            res: [
-                /\bdlc\b/i, /\badd-?on\b/i, /\bexpansion\b/i, /\bseason\s+pass\b/i,
-                /\bbundle\b/i, /\bpack\b/i,
-                /扩展包?|擴展包?|资料片|資料片|追加内容|追加內容|季票/,
-                /拡張パック?/, /追加コンテンツ/, /シーズンパス/,
-                /확장팩/, /추가\s*콘텐츠/, /시즌\s*패스/,
-                /дополнени/i, /сезонный\s+пропуск/i,
-                /\bexpansión\b/i, /\bpase\s+de\s+temporada\b/i
-            ]
-        },
-        {
-            id: 'tool',
-            res: [
-                /\bdedicated\s+server\b/i, /\bsdk\b/i,
-                /\btool\b/i, /\bworkshop\b/i, /\bmod\s+tool\b/i,
-                /工具/, /服务器|伺服器/, /专用服务器|專用伺服器/,
-                /ツール/, /サーバー/,
-                /도구/, /서버/,
-                /инструмент/i, /сервер/i,
-                /herramienta/i, /servidor/i
-            ]
-        }
+        { id: 'demo', res: [
+            /\bdemo\b/i, /\btrial\b/i, /\bbeta\b/i, /\bplaytest\b/i, /\bpreview\b/i,
+            /\bprologue\b/i, /\bprolog\b/i,
+            /试[玩用]/, /体验版?|體驗版?/, /序章/, /测试版?|測試版?/, /预览版?|預覽版?/,
+            /体験版?/, /お試し/, /체험판/, /데모/, /프롤로그/,
+            /демо/i, /пробн/i, /пролог/i, /demostración/i, /démo/i,
+            /\btrailers?\b/i, /预告片?|預告片?/, /予告編?/, /트레일러/, /трейлер/i, /\btráiler\b/i, /\bbande-annonce\b/i
+        ]},
+        { id: 'soundtrack', res: [
+            /\bsoundtrack\b/i, /\bsound\s+track\b/i, /\bost\b/i,
+            /\boriginal\s+(?:game\s+)?soundtrack\b/i,
+            /原声带?|原聲帶?/, /音乐包|音樂包/, /音轨|音軌/, /配乐|配樂/, /音乐集|音樂集/,
+            /サウンドトラック/, /サントラ/, /사운드트랙/, /오리지널\s*사운드/,
+            /саундтрек/i, /партитура/i, /banda\s+sonora/i, /colonna\s+sonora/i
+        ]},
+        { id: 'dlc', res: [
+            /\bdlc\b/i, /\badd-?on\b/i, /\bexpansion\b/i, /\bseason\s+pass\b/i,
+            /\bbundle\b/i, /\bpack\b/i,
+            /扩展包?|擴展包?|资料片|資料片|追加内容|追加內容|季票/,
+            /拡張パック?/, /追加コンテンツ/, /シーズンパス/,
+            /확장팩/, /추가\s*콘텐츠/, /시즌\s*패스/,
+            /дополнени/i, /сезонный\s+пропуск/i,
+            /\bexpansión\b/i, /\bpase\s+de\s+temporada\b/i
+        ]},
+        { id: 'tool', res: [
+            /\bdedicated\s+server\b/i, /\bsdk\b/i, /\btool\b/i, /\bworkshop\b/i, /\bmod\s+tool\b/i,
+            /工具/, /服务器|伺服器/, /专用服务器|專用伺服器/,
+            /ツール/, /サーバー/, /도구/, /서버/,
+            /инструмент/i, /сервер/i, /herramienta/i, /servidor/i
+        ]}
     ];
 
     function categorize(name) {
         const cats = [];
-        for (const c of CAT_DEFS) {
-            if (c.res.some(re => re.test(name))) cats.push(c.id);
-        }
+        for (const c of CAT_DEFS) if (c.res.some(re => re.test(name))) cats.push(c.id);
         if (!cats.length) cats.push('game');
         return cats;
+    }
+
+    function parseDate(s) {
+        if (!s) return null;
+        let m = s.match(/(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})/);
+        if (m) return new Date(+m[1], +m[2] - 1, +m[3]).getTime();
+        m = s.match(/(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})/);
+        if (m) return new Date(+m[1], +m[2] - 1, +m[3]).getTime();
+        const v = Date.parse(s);
+        return isNaN(v) ? null : v;
     }
 
     const I18N = {
@@ -106,25 +83,24 @@
             title: 'License Cleaner',
             riskBanner: '⚠ Deleting licenses cannot be undone. Most games can be re-added from the store; delisted games cannot, and some games are no longer available in certain regions.',
             stat_removed: 'Removed (total)', stat_skipped: 'Skipped (error 29)',
-            stat_retry: 'To retry', stat_remain: 'Remaining',
+            stat_retry: 'To retry', stat_perm: 'Not removable', stat_remain: 'Remaining',
             notStarted: 'Not started',
             btn_start: 'Start cleaning', btn_scan: 'Scan list only', btn_stop: 'Stop', btn_reset: 'Reset records',
-            btn_clearCool: 'Clear cooldown',
-            btn_restoreSkip: 'Restore all records',
-            btn_clearLog: 'Clear log',
-            btn_skipFW: 'Skip Free Weekend',
+            btn_clearCool: 'Clear cooldown', btn_restoreSkip: 'Restore all records',
+            btn_clearLog: 'Clear log', btn_skipFW: 'Skip Free Weekend',
             tip_scan: 'Read every page and list the removable items without deleting anything',
             tip_reset: 'Clear the skipped list, totals, deleted list and cooldown state',
-            tip_restoreSkip: 'Restore everything backed up when you last reset records: skipped list, removed total, deleted list and cooldown state',
+            tip_restoreSkip: 'Restore everything backed up when you last reset records',
             tip_clearLog: 'Empty the log panel (records, totals and lists are not affected)',
-            tip_skipFW: 'Add every item whose name contains "Free Weekend" to the skipped list so it is never deleted (these usually fail with error 29)',
-            confirmReset: 'Reset all records?\n\nThis clears the skipped list, totals, deleted list and cooldown state. Everything is backed up first, so you can bring it back later with the "Restore all records" button.',
-            confirmDelete: 'This cannot be undone. You may accidentally remove a game you want to keep.\n\nMost games can be re-added by searching the Steam store, but delisted games cannot be re-added, and some games are no longer available in certain regions.',
+            tip_skipFW: 'Add every item whose name contains "Free Weekend" to the skipped list so it is never deleted',
+            confirmReset: 'Reset all records?\n\nThis clears the skipped list, totals, deleted list and cooldown state. Everything is backed up first.',
+            confirmDelete: 'This cannot be undone. You may accidentally remove a game you want to keep.\n\nMost games can be re-added by searching the Steam store, but delisted games cannot be re-added.',
             set_delay_pre: 'Base delay', set_delay_post: 'sec',
             set_cool_pre: 'First cooldown', set_cool_post: 'min (+1 each)',
             set_coolmax_pre: 'Max cooldown', set_coolmax_post: 'min',
             set_skip_pre: 'Protect newest', set_skip_post: 'items (never deleted)',
-            tab_log: 'Log', tab_pending: 'Pending', tab_deleted: 'Deleted', tab_skipped: 'Skipped', tab_failed: 'Failed',
+            tab_log: 'Log', tab_pending: 'Pending', tab_perm: 'Not removable',
+            tab_deleted: 'Deleted', tab_skipped: 'Skipped', tab_failed: 'Failed',
             filterPh: 'Search name or ID',
             b_idle: 'Idle', b_run: 'Running', b_cool: 'Cooling down', b_done: 'Done',
             b_scanned: 'Scan done', b_stopped: 'Stopped', b_scanning: 'Scanning',
@@ -135,27 +111,25 @@
             curAllDone: 'All done', curStopped: 'Stopped',
             eta: (dur, at) => `About ${dur} left, done around ${at}`,
             etaReading: ' (still reading pages)',
-            coolBar: (c, l, r) => `Rate-limit cooldown, <b>${c}</b> left · level ${l}` +
-                (r ? ' — no delete requests are sent during cooldown' : ' — it will wait for the cooldown to end after you press Start'),
+            coolBar: (c, l, r) => `Rate-limit cooldown, <b>${c}</b> left · level ${l}` + (r ? ' — no delete requests are sent during cooldown' : ' — it will wait for the cooldown to end after you press Start'),
             unitMin: 'min', unitHour: 'h', unitDay: 'd',
             unknownName: 'Unknown item', nameMissing: '(name not recorded)',
-            processing: 'Processing', queuePos: i => `Queue #${i}`,
-            tailPos: i => `Last batch #${i}`,
+            processing: 'Processing', queuePos: i => `Queue #${i}`, tailPos: i => `Last batch #${i}`,
             retryExtra: (a, m, e) => `To retry · failed ${a}/${m} · ${e}`,
             gaveExtra: e => `Given up · ${e}`,
             emptyPending: 'Nothing yet. Press "Scan list only" or "Start cleaning" to read the removable items.',
             emptyDeleted: 'No deletion records yet (only items deleted since v5.1 are recorded).',
             emptySkipped: 'No skipped items.', emptyFailed: 'No failed items.',
-            noMatch: 'No matching items',
+            emptyPerm: 'Nothing yet. Press "Scan list only" to read the full license list; items without a remove button (purchased products, time-limited licenses) will be listed here.',
+            noMatch: 'No matching items', noFilterMatch: 'No items match the current filter.',
             more: (n, c) => `${n} items, showing the first ${c}. Use the search box to narrow it down.`,
             errCode: c => `Error ${c}`,
-            resetDone: 'Records reset',
-            coolCleared: 'Cooldown cleared',
+            resetDone: 'Records reset', coolCleared: 'Cooldown cleared',
             restoreDone: (a, n, r, d) => `Restored all records: ${a} skipped items added (${n} on record), removed total +${r}, ${d} deleted-list entries`,
             restoreEmpty: 'No backup to restore',
             prepLog: n => `Protect-newest is on: the ${n} newest items will not be deleted`,
             protectedLog: n => `Protected ${n} newest item(s), they are not deleted`,
-            scanProtected: n => `Protect-newest: the ${n} newest item(s) were left unchecked (you can still check them manually)`,
+            scanProtected: n => `Protect-newest: the ${n} newest item(s) were left unchecked`,
             startLog: (r, s) => `Started (total removed ${r}, skipped on record ${s})`,
             startLogChecked: n => `Started with ${n} checked items`,
             stillCooling: c => `Still inside the previous cooldown, ${c} left. Waiting first.`,
@@ -181,19 +155,14 @@
             stopReq: 'Stop requested; will stop after the current step',
             scanStart: 'Scanning all pages (nothing will be deleted)',
             scanDone: n => `Scan complete: ${n} removable items. See the Pending tab.`,
-            scanStopped: 'Scan stopped',
-            scanErr: m => `Scan error: ${m}`,
+            scanStopped: 'Scan stopped', scanErr: m => `Scan error: ${m}`,
             scanSwitched: 'Switched to "Pending" tab — check items, then press "Start cleaning".',
-            cat_demo: 'Demo/Trailer', cat_soundtrack: 'Soundtrack', cat_dlc: 'DLC',
-            cat_tool: 'Tool', cat_game: 'Game',
+            cat_demo: 'Demo/Trailer', cat_soundtrack: 'Soundtrack', cat_dlc: 'DLC', cat_tool: 'Tool', cat_game: 'Game',
             sel_info: (a, b) => `${a} / ${b} selected`,
             sel_all: 'Select all', sel_inv: 'Invert', sel_none: 'Clear',
             noSelection: 'Nothing selected — pick at least one item.',
             q_label: 'Quick clean:',
-            q_demo: 'Only Demo/Trailer',
-            q_soundtrack: 'Only Soundtrack',
-            q_dlc: 'Only DLC',
-            q_tool: 'Only Tool',
+            q_demo: 'Only Demo/Trailer', q_soundtrack: 'Only Soundtrack', q_dlc: 'Only DLC', q_tool: 'Only Tool',
             quickScanning: 'Quick clean: scanning first...',
             quickNoItems: 'Quick clean: no removable items found.',
             quickNone: c => `Quick clean: no "${c}" items.`,
@@ -201,43 +170,48 @@
             skipFWScanning: 'Skip Free Weekend: scanning first...',
             skipFWNoItems: 'Skip Free Weekend: no removable items found.',
             skipFWNone: 'Skip Free Weekend: no "Free Weekend" items in the list.',
-            skipFWDone: (n, total) => `Skip Free Weekend: added ${n} item(s) to the skipped list (${total} on record). They will not be deleted.`,
+            skipFWDone: (n, total) => `Skip Free Weekend: added ${n} item(s) to the skipped list (${total} on record).`,
             sel_skip: 'Add checked to skip',
             tip_skipSel: 'Add all checked items to the skipped list so they are never deleted, and remove them from this list',
             skipSelNone: 'Add to skip: nothing checked.',
-            skipSelDone: (n, total) => `Added ${n} checked item(s) to the skipped list (${total} on record). They will not be deleted.`,
-            showAll: n => `Show all ${n}`,
-            showLess: c => `Show first ${c} only`,
+            skipSelDone: (n, total) => `Added ${n} checked item(s) to the skipped list (${total} on record).`,
+            showAll: n => `Show all ${n}`, showLess: c => `Show first ${c} only`,
             sel_unskip: 'Move checked to pending',
             tip_unskipSel: 'Remove the checked items from the skipped list and put them back into the pending-deletion list',
             unskipNone: 'Move to pending: nothing checked.',
-            unskipDone: (n, total) => `Moved ${n} item(s) out of the skipped list into pending (${total} pending in total). Check the Pending tab.`,
+            unskipDone: (n, total) => `Moved ${n} item(s) out of the skipped list into pending (${total} pending in total).`,
             unskipScanning: n => `Removed ${n} item(s) from the skipped list. Scanning to rebuild the pending list...`,
-            usingScan: n => `Using the earlier scan result (${n} items), no need to re-read the pages`
+            usingScan: n => `Using the earlier scan result (${n} items), no need to re-read the pages`,
+            f_method: 'Acquired via', f_anyMethod: 'Any method',
+            f_from: 'From', f_to: 'To', f_apply: 'Show & check matching',
+            tip_apply: 'Combine the active category chips with the acquisition method and date range: hide everything that does not match, and check only the matching items',
+            fApplied: n => `Filter applied: showing only matching items, ${n} checked.`,
+            fAppliedPerm: n => `Filter applied: showing ${n} matching item(s).`,
+            f_clear: 'Clear filter', fCleared: 'Filter cleared — showing all items.',
+            fInfo: (a, b) => `Showing ${a} / ${b} items`
         },
         zh: {
             title: '库存清理器',
             riskBanner: '⚠ 删除授权不可逆。大部分游戏可在商店重新添加；已下架的游戏无法重新入库，部分游戏也不再支持某些地区。',
             stat_removed: '已删除（累计）', stat_skipped: '已跳过（错误29）',
-            stat_retry: '待重试', stat_remain: '本轮剩余',
+            stat_retry: '待重试', stat_perm: '不可移除', stat_remain: '本轮剩余',
             notStarted: '尚未开始',
             btn_start: '开始清理', btn_scan: '仅扫描列表', btn_stop: '停止', btn_reset: '重置记录',
-            btn_clearCool: '清除冷却',
-            btn_restoreSkip: '恢复全部记录',
-            btn_clearLog: '清理日志',
-            btn_skipFW: '跳过免费周末',
+            btn_clearCool: '清除冷却', btn_restoreSkip: '恢复全部记录',
+            btn_clearLog: '清理日志', btn_skipFW: '跳过免费周末',
             tip_scan: '只读取所有分页并列出待删除项目，不执行删除',
             tip_reset: '清除已跳过列表、累计计数、已删除列表和冷却状态',
-            tip_restoreSkip: '恢复上次重置记录时备份的全部内容：已跳过列表、累计删除数、已删除列表和冷却状态',
+            tip_restoreSkip: '恢复上次重置记录时备份的全部内容',
             tip_clearLog: '清空日志面板（不影响记录、计数和各列表）',
-            tip_skipFW: '将名称包含 “Free Weekend” 的项目全部加入跳过列表，不再删除（免费周末入库的项目大概率触发错误29）',
-            confirmReset: '确定要重置所有记录吗？\n\n将清除已跳过列表、累计计数、已删除列表和冷却状态。所有记录会先备份，之后可用“恢复全部记录”按钮找回。',
-            confirmDelete: '此操作不可逆，可能误删想保留的游戏。\n\n大部分游戏可在商店搜索重新添加，但已下架的游戏无法重新入库，部分游戏也不再支持某些地区。',
+            tip_skipFW: '将名称包含 “Free Weekend” 的项目全部加入跳过列表，不再删除',
+            confirmReset: '确定要重置所有记录吗？\n\n将清除已跳过列表、累计计数、已删除列表和冷却状态。所有记录会先备份。',
+            confirmDelete: '此操作不可逆，可能误删想保留的游戏。\n\n大部分游戏可在商店搜索重新添加，但已下架的游戏无法重新入库。',
             set_delay_pre: '基础间隔', set_delay_post: '秒',
             set_cool_pre: '首次冷却', set_cool_post: '分钟（每次+1）',
             set_coolmax_pre: '最长冷却', set_coolmax_post: '分钟',
             set_skip_pre: '保护最新', set_skip_post: '个（不删除）',
-            tab_log: '日志', tab_pending: '待删除', tab_deleted: '已删除', tab_skipped: '已跳过', tab_failed: '失败',
+            tab_log: '日志', tab_pending: '待删除', tab_perm: '不可移除',
+            tab_deleted: '已删除', tab_skipped: '已跳过', tab_failed: '失败',
             filterPh: '搜索名称或 ID',
             b_idle: '空闲', b_run: '运行中', b_cool: '冷却中', b_done: '已完成',
             b_scanned: '扫描完成', b_stopped: '已停止', b_scanning: '扫描中',
@@ -248,22 +222,20 @@
             curAllDone: '全部处理完毕', curStopped: '已停止',
             eta: (dur, at) => `预计还需 ${dur}，约 ${at} 完成`,
             etaReading: '（仍在读取分页）',
-            coolBar: (c, l, r) => `限流冷却中，剩余 <b>${c}</b>　·　第 ${l} 级` +
-                (r ? '，冷却期间不会发送任何删除请求' : '，点击开始后会先等冷却结束'),
+            coolBar: (c, l, r) => `限流冷却中，剩余 <b>${c}</b>　·　第 ${l} 级` + (r ? '，冷却期间不会发送任何删除请求' : '，点击开始后会先等冷却结束'),
             unitMin: '分钟', unitHour: '小时', unitDay: '天',
             unknownName: '未知游戏名', nameMissing: '（名称未记录）',
-            processing: '处理中', queuePos: i => `排队第 ${i} 位`,
-            tailPos: i => `最后批次第 ${i} 位`,
+            processing: '处理中', queuePos: i => `排队第 ${i} 位`, tailPos: i => `最后批次第 ${i} 位`,
             retryExtra: (a, m, e) => `待重试 · 失败 ${a}/${m} · ${e}`,
             gaveExtra: e => `已放弃 · ${e}`,
             emptyPending: '暂无。点击"仅扫描列表"或"开始清理"来读取待删除项目',
             emptyDeleted: '还没有删除记录（只记录 v5.1 之后删除的项目）',
             emptySkipped: '没有被跳过的项目', emptyFailed: '没有失败的项目',
-            noMatch: '没有匹配的项目',
+            emptyPerm: '暂无。点击「仅扫描列表」读取完整授权列表；没有移除按钮的项目（购买产品、限时入库内容等）会列在这里。',
+            noMatch: '没有匹配的项目', noFilterMatch: '没有符合当前筛选条件的项目。',
             more: (n, c) => `共 ${n} 条，仅显示前 ${c} 条，可用搜索框筛选`,
             errCode: c => `错误${c}`,
-            resetDone: '记录已重置',
-            coolCleared: '冷却已清除',
+            resetDone: '记录已重置', coolCleared: '冷却已清除',
             restoreDone: (a, n, r, d) => `已恢复全部记录：新增 ${a} 个跳过项目（当前记录 ${n} 个），累计删除数 +${r}，已删除列表 ${d} 条`,
             restoreEmpty: '没有可恢复的备份',
             prepLog: n => `已启用"保护最新 N 个"：最新入库的 ${n} 个项目不会被删除`,
@@ -294,19 +266,14 @@
             stopReq: '已请求停止，当前操作结束后停下',
             scanStart: '开始扫描所有分页（不会删除任何东西）',
             scanDone: n => `扫描完成：共 ${n} 个可删除项目，可在"待删除"页签查看`,
-            scanStopped: '扫描已停止',
-            scanErr: m => `扫描异常：${m}`,
+            scanStopped: '扫描已停止', scanErr: m => `扫描异常：${m}`,
             scanSwitched: '已切换到「待删除」页，勾选项目后点「开始清理」。',
-            cat_demo: '试玩/预告', cat_soundtrack: '原声', cat_dlc: 'DLC',
-            cat_tool: '工具', cat_game: '游戏',
+            cat_demo: '试玩/预告', cat_soundtrack: '原声', cat_dlc: 'DLC', cat_tool: '工具', cat_game: '游戏',
             sel_info: (a, b) => `已选 ${a} / ${b}`,
             sel_all: '全选', sel_inv: '反选', sel_none: '清空',
             noSelection: '没有选中任何项目——请至少勾选一项。',
             q_label: '快捷清理：',
-            q_demo: '仅删试玩/预告',
-            q_soundtrack: '仅删原声',
-            q_dlc: '仅删 DLC',
-            q_tool: '仅删工具',
+            q_demo: '仅删试玩/预告', q_soundtrack: '仅删原声', q_dlc: '仅删 DLC', q_tool: '仅删工具',
             quickScanning: '快捷清理：先扫描列表...',
             quickNoItems: '快捷清理：未找到可删除项目。',
             quickNone: c => `快捷清理：没有「${c}」类项目。`,
@@ -314,19 +281,25 @@
             skipFWScanning: '跳过免费周末：先扫描列表...',
             skipFWNoItems: '跳过免费周末：未找到可删除项目。',
             skipFWNone: '跳过免费周末：列表中没有包含 Free Weekend 的项目。',
-            skipFWDone: (n, total) => `跳过免费周末：已将 ${n} 个项目加入跳过列表（当前记录 ${total} 个），不会被删除。`,
+            skipFWDone: (n, total) => `跳过免费周末：已将 ${n} 个项目加入跳过列表（当前记录 ${total} 个）。`,
             sel_skip: '勾选项加入跳过',
             tip_skipSel: '将所有勾选项加入跳过列表（永不删除），并从当前列表中移除',
             skipSelNone: '加入跳过：没有勾选任何项目。',
-            skipSelDone: (n, total) => `已将勾选的 ${n} 个项目加入跳过列表（当前记录 ${total} 个），不会被删除。`,
-            showAll: n => `显示全部 ${n} 条`,
-            showLess: c => `只显示前 ${c} 条`,
+            skipSelDone: (n, total) => `已将勾选的 ${n} 个项目加入跳过列表（当前记录 ${total} 个）。`,
+            showAll: n => `显示全部 ${n} 条`, showLess: c => `只显示前 ${c} 条`,
             sel_unskip: '勾选项放入待删除',
             tip_unskipSel: '将勾选的项目从跳过列表移除，并放回待删除列表',
             unskipNone: '放入待删除：没有勾选任何项目。',
-            unskipDone: (n, total) => `已将 ${n} 个项目移出跳过列表并放入待删除（待删除共 ${total} 个），请到「待删除」页签查看。`,
+            unskipDone: (n, total) => `已将 ${n} 个项目移出跳过列表并放入待删除（待删除共 ${total} 个）。`,
             unskipScanning: n => `已将 ${n} 个项目移出跳过列表，正在扫描以重建待删除列表...`,
-            usingScan: n => `使用之前的扫描结果（${n} 个），无需重新读取分页`
+            usingScan: n => `使用之前的扫描结果（${n} 个），无需重新读取分页`,
+            f_method: '获取方式', f_anyMethod: '全部方式',
+            f_from: '从', f_to: '到', f_apply: '显示并勾选符合项',
+            tip_apply: '将已激活的分类标签与获取方式、日期区间叠加：隐藏所有不符合的项目，只勾选同时满足的',
+            fApplied: n => `筛选完成：仅显示符合条件的项目，已勾选 ${n} 个。`,
+            fAppliedPerm: n => `筛选完成：显示 ${n} 个符合条件的项目。`,
+            f_clear: '清除筛选', fCleared: '已清除筛选，显示全部项目。',
+            fInfo: (a, b) => `显示 ${a} / ${b} 项`
         }
     };
 
@@ -335,9 +308,7 @@
         skipped: [], removed: 0, minGap: 0,
         coolLevel: 0, cooldownUntil: 0,
         delaySec: CFG.delaySec, coolMin: CFG.coolMin, coolMaxMin: CFG.coolMaxMin,
-        skipFirst: 0,
-        skippedInfo: {},
-        lang: 'en'
+        skipFirst: 0, skippedInfo: {}, lang: 'en'
     };
     function loadState() {
         try {
@@ -393,12 +364,11 @@
     const run = {
         running: false, scanning: false, last: '', ctl: null, current: '',
         queue: [], cur: null, tail: [], preparing: false,
-        retry: new Map(),
-        gaveUp: new Map(),
+        retry: new Map(), gaveUp: new Map(),
         processed: 0, removedRun: 0, skippedRun: 0,
         startAt: 0, okStreak: 0, sinceLimit: 0, failStreak: [],
         wake: null, lockRelease: null,
-        scanList: [],
+        scanList: [], nonRemovableList: [], nonRemovableSeen: new Set(),
         allowedSet: null
     };
 
@@ -410,22 +380,22 @@
         const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
         return h > 0 ? `${h}:${pad2(m)}:${pad2(sec)}` : `${pad2(m)}:${pad2(sec)}`;
     };
-    // 预计剩余时长：天 / 小时 / 分钟
     const fmtDhm = ms => {
         const total = Math.max(1, Math.ceil(ms / 60000));
-        const d = Math.floor(total / 1440);
-        const h = Math.floor((total % 1440) / 60);
-        const m = total % 60;
+        const d = Math.floor(total / 1440), h = Math.floor((total % 1440) / 60), m = total % 60;
         const parts = [];
         if (d) parts.push(`${d}${t('unitDay')}`);
         if (d || h) parts.push(`${h}${t('unitHour')}`);
         parts.push(`${m}${t('unitMin')}`);
         return parts.join(' ');
     };
-    // 预计完成的具体日期时间
     const fmtAt = ms => {
         const d = new Date(Date.now() + ms);
         return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+    };
+    const fmtInputDate = ts => {
+        const d = new Date(ts);
+        return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
     };
 
     let els = null;
@@ -447,7 +417,7 @@
     #slc .slc-badge.cool{background:rgba(255,200,44,.16);color:#ffc82c}
     #slc .slc-badge.done{background:rgba(164,208,7,.16);color:#a4d007}
     #slc .slc-risk{display:flex;align-items:flex-start;gap:8px;padding:9px 16px;background:rgba(224,96,94,.08);border-left:3px solid #e0605e;color:#e8a09e;font-size:12px;line-height:1.5}
-    #slc .slc-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:rgba(0,0,0,.3)}
+    #slc .slc-stats{display:grid;grid-template-columns:repeat(5,1fr);gap:1px;background:rgba(0,0,0,.3)}
     #slc .slc-stat{background:rgba(10,18,28,.55);padding:12px 16px}
     #slc .slc-stat b{display:block;font-size:24px;font-weight:300;color:#fff;line-height:1.2}
     #slc .slc-stat span{font-size:11px;color:#8f98a0;letter-spacing:.04em}
@@ -466,23 +436,15 @@
     #slc .slc-quickbtn:hover{background:rgba(103,193,245,.25);color:#fff}
     #slc .slc-quickbtn:disabled{opacity:.35;cursor:default}
     #slc .slc-quickbtn.q-demo{color:#c9e07b;border-color:rgba(164,208,7,.4);background:rgba(164,208,7,.1)}
-    #slc .slc-quickbtn.q-demo:hover{background:rgba(164,208,7,.28);color:#fff}
     #slc .slc-quickbtn.q-sound{color:#c5a3ff;border-color:rgba(152,110,255,.4);background:rgba(152,110,255,.1)}
-    #slc .slc-quickbtn.q-sound:hover{background:rgba(152,110,255,.28);color:#fff}
     #slc .slc-quickbtn.q-dlc{color:#ff9f7a;border-color:rgba(255,130,80,.4);background:rgba(255,130,80,.1)}
-    #slc .slc-quickbtn.q-dlc:hover{background:rgba(255,130,80,.28);color:#fff}
     #slc .slc-quickbtn.q-tool{color:#ffc82c;border-color:rgba(255,200,44,.4);background:rgba(255,200,44,.1)}
-    #slc .slc-quickbtn.q-tool:hover{background:rgba(255,200,44,.28);color:#fff}
     #slc .slc-btn{border:0;border-radius:2px;padding:0 16px;line-height:30px;font-size:13px;cursor:pointer;font-family:inherit;transition:filter .15s}
     #slc .slc-btn:disabled{opacity:.35;cursor:default}
     #slc .slc-green{background:linear-gradient(-60deg,#6fa720 5%,#588a1b 95%);color:#d2efa9}
-    #slc .slc-green:not(:disabled):hover{background:linear-gradient(-60deg,#8ed629 5%,#6aa621 95%);color:#fff}
     #slc .slc-red{background:rgba(212,60,60,.25);color:#ff8a80}
-    #slc .slc-red:not(:disabled):hover{background:rgba(212,60,60,.45);color:#fff}
     #slc .slc-ghost{background:rgba(103,193,245,.15);color:#67c1f5}
-    #slc .slc-ghost:not(:disabled):hover{background:rgba(103,193,245,.3);color:#fff}
     #slc .slc-yellow{background:rgba(255,200,44,.18);color:#ffc82c}
-    #slc .slc-yellow:not(:disabled):hover{background:rgba(255,200,44,.35);color:#fff}
     #slc .slc-set{margin-left:auto;display:flex;flex-wrap:wrap;gap:14px;color:#8f98a0;font-size:12px}
     #slc .slc-set label{display:flex;align-items:center;gap:6px}
     #slc .slc-set input{width:64px;padding:3px 6px;border-radius:2px;border:1px solid #000;background:rgba(0,0,0,.35);color:#fff;font-size:12px;box-shadow:1px 1px 0 rgba(255,255,255,.08)}
@@ -494,8 +456,6 @@
     #slc .slc-log .warn{color:#ffc82c}
     #slc .slc-log .err{color:#e0605e}
     #slc .slc-log .info{color:#67c1f5}
-    #slc .slc-log::-webkit-scrollbar{width:8px}
-    #slc .slc-log::-webkit-scrollbar-thumb{background:rgba(103,193,245,.25);border-radius:4px}
     #slc .slc-tabs{display:flex;align-items:center;flex-wrap:wrap;gap:2px;padding:0 10px;border-top:1px solid rgba(0,0,0,.4);background:rgba(0,0,0,.2)}
     #slc .slc-tab{background:none;border:0;border-bottom:2px solid transparent;color:#8f98a0;padding:10px 12px;font-size:13px;cursor:pointer;font-family:inherit}
     #slc .slc-tab:hover{color:#fff}
@@ -506,14 +466,23 @@
     #slc .slc-cats{display:flex;flex-wrap:wrap;gap:6px}
     #slc .slc-cat{border:1px solid rgba(103,193,245,.3);background:rgba(103,193,245,.08);color:#8f98a0;border-radius:12px;padding:3px 10px;font-size:12px;cursor:pointer;font-family:inherit}
     #slc .slc-cat:hover{background:rgba(103,193,245,.2);color:#fff}
+    #slc .slc-cat.on{background:rgba(103,193,245,.45);color:#fff;border-color:rgba(103,193,245,.75);font-weight:600}
     #slc .slc-cat em{font-style:normal;margin-left:5px;color:#67c1f5;font-size:11px}
-    #slc .slc-selbtns{display:flex;gap:6px;margin-left:auto;align-items:center}
+    #slc .slc-cat.on em{color:#fff}
+    #slc .slc-selbtns{display:flex;gap:6px;margin-left:auto;align-items:center;flex-wrap:wrap}
     #slc .slc-selbtns button{border:1px solid rgba(103,193,245,.3);background:rgba(103,193,245,.1);color:#67c1f5;border-radius:2px;padding:3px 10px;font-size:12px;cursor:pointer;font-family:inherit}
     #slc .slc-selbtns button:hover{background:rgba(103,193,245,.25);color:#fff}
     #slc .slc-selinfo{font-size:12px;color:#8f98a0;margin-left:8px;font-variant-numeric:tabular-nums}
+    #slc .slc-filterbar{padding:10px 16px;border-top:1px solid rgba(0,0,0,.4);background:rgba(0,0,0,.2);display:flex;flex-wrap:wrap;gap:12px;align-items:center;font-size:12px;color:#8f98a0}
+    #slc .slc-filterbar label{display:flex;align-items:center;gap:6px}
+    #slc .slc-filterbar select,#slc .slc-filterbar input{padding:3px 6px;border-radius:2px;border:1px solid #000;background:rgba(0,0,0,.35);color:#fff;font-size:12px;font-family:inherit;color-scheme:dark}
+    #slc .slc-filterbar select{max-width:240px}
+    #slc .slc-filterbar button{border:1px solid rgba(103,193,245,.3);background:rgba(103,193,245,.1);color:#67c1f5;border-radius:2px;padding:3px 12px;font-size:12px;cursor:pointer;font-family:inherit}
+    #slc .slc-filterbar button:hover{background:rgba(103,193,245,.25);color:#fff}
+    #slc .slc-finfo{color:#67c1f5;font-variant-numeric:tabular-nums}
     #slc .slc-list{max-height:320px;overflow-y:auto;background:rgba(0,0,0,.38);border-top:1px solid rgba(0,0,0,.4);font-size:12px}
     #slc .slc-row{display:grid;grid-template-columns:minmax(0,1fr) 90px 190px;gap:12px;padding:6px 16px;align-items:center}
-    #slc .slc-row.sel{grid-template-columns:24px minmax(0,1fr) 90px 160px}
+    #slc .slc-row.sel{grid-template-columns:24px minmax(0,1fr) 90px 280px}
     #slc .slc-row input[type=checkbox]{width:14px;height:14px;accent-color:#67c1f5;cursor:pointer;margin:0}
     #slc .slc-row:nth-child(even){background:rgba(255,255,255,.025)}
     #slc .slc-row:hover{background:rgba(103,193,245,.08)}
@@ -525,15 +494,12 @@
     #slc .slc-empty,#slc .slc-more{padding:18px 16px;color:#56707f;text-align:center}
     #slc .slc-morebtn{border:1px solid rgba(103,193,245,.3);background:rgba(103,193,245,.1);color:#67c1f5;border-radius:2px;padding:3px 12px;font-size:12px;cursor:pointer;font-family:inherit;margin-left:6px}
     #slc .slc-morebtn:hover{background:rgba(103,193,245,.25);color:#fff}
-    #slc .slc-list::-webkit-scrollbar{width:8px}
-    #slc .slc-list::-webkit-scrollbar-thumb{background:rgba(103,193,245,.25);border-radius:4px}
     @media (max-width:640px){#slc .slc-stats{grid-template-columns:repeat(2,1fr)}#slc .slc-set{margin-left:0}#slc .slc-row{grid-template-columns:minmax(0,1fr) 120px}#slc .slc-row .i{display:none}#slc .slc-row.sel{grid-template-columns:24px minmax(0,1fr) 120px}#slc .slc-filter{margin-left:0;width:100%}#slc .slc-meta{flex-direction:column;gap:3px}#slc .slc-meta span:last-child{max-width:100%;text-align:left}}
     `;
 
     function buildUI() {
         const titleElem = document.querySelector('.page_content > h2');
         if (!titleElem) return;
-
         const style = document.createElement('style');
         style.textContent = CSS;
         document.head.appendChild(style);
@@ -544,7 +510,7 @@
           <div class="slc-head">
             <div class="slc-title">
               <svg viewBox="0 0 24 24"><path d="M9 3h6l1 2h4v2H4V5h4l1-2zm-3 6h12l-1 12H7L6 9zm4 2v8h1.5v-8H10zm3.5 0v8H15v-8h-1.5z"/></svg>
-              <span data-i18n="title"></span><em>v2.0</em>
+              <span data-i18n="title"></span><em>v2.5</em>
             </div>
             <div class="slc-headr">
               <button class="slc-lang" data-k="lang" title="English / 中文"></button>
@@ -556,6 +522,7 @@
             <div class="slc-stat"><b data-k="removed">0</b><span data-i18n="stat_removed"></span></div>
             <div class="slc-stat"><b data-k="skipped">0</b><span data-i18n="stat_skipped"></span></div>
             <div class="slc-stat"><b data-k="retry">0</b><span data-i18n="stat_retry"></span></div>
+            <div class="slc-stat"><b data-k="perm">0</b><span data-i18n="stat_perm"></span></div>
             <div class="slc-stat"><b data-k="remain">0</b><span data-i18n="stat_remain"></span></div>
           </div>
           <div class="slc-prog">
@@ -589,6 +556,7 @@
           <div class="slc-tabs">
             <button class="slc-tab on" data-tab="log"><span data-i18n="tab_log"></span></button>
             <button class="slc-tab" data-tab="pending"><span data-i18n="tab_pending"></span><em>0</em></button>
+            <button class="slc-tab" data-tab="perm"><span data-i18n="tab_perm"></span><em>0</em></button>
             <button class="slc-tab" data-tab="deleted"><span data-i18n="tab_deleted"></span><em>0</em></button>
             <button class="slc-tab" data-tab="skipped"><span data-i18n="tab_skipped"></span><em>0</em></button>
             <button class="slc-tab" data-tab="failed"><span data-i18n="tab_failed"></span><em>0</em></button>
@@ -604,6 +572,14 @@
               <button data-k="unskipsel" data-i18n="sel_unskip" data-i18n-title="tip_unskipSel" hidden></button>
               <span class="slc-selinfo" data-k="selinfo"></span>
             </div>
+          </div>
+          <div class="slc-filterbar" data-k="fbar" hidden>
+            <label><span data-i18n="f_method"></span> <select data-k="fMethod"></select></label>
+            <label><span data-i18n="f_from"></span> <input type="date" data-k="fFrom"></label>
+            <label><span data-i18n="f_to"></span> <input type="date" data-k="fTo"></label>
+            <button data-k="fApply" data-i18n="f_apply" data-i18n-title="tip_apply"></button>
+            <button data-k="fClear" data-i18n="f_clear" hidden></button>
+            <span class="slc-finfo" data-k="fInfo"></span>
           </div>
           <div class="slc-log" data-k="log"></div>
           <div class="slc-list" data-k="list" hidden></div>`;
@@ -625,6 +601,8 @@
         els.selall.addEventListener('click', () => selectAll(true));
         els.selnone.addEventListener('click', () => selectAll(false));
         els.selinv.addEventListener('click', invertSel);
+        els.fApply.addEventListener('click', applyConditionFilter);
+        els.fClear.addEventListener('click', clearPendingFilter);
         els.skipsel.addEventListener('click', skipChecked);
         els.unskipsel.addEventListener('click', unskipChecked);
         els.qDemo.addEventListener('click', () => quickClean('demo'));
@@ -676,7 +654,6 @@
         els.reset.addEventListener('click', () => {
             if (run.running) return;
             if (!window.confirm(t('confirmReset'))) return;
-            // 有内容才备份，避免连续重置两次把有效备份覆盖成空的
             if (state.skipped.length || state.removed > 0 || deletedList.length) {
                 const snap = {
                     skipped: state.skipped.slice(),
@@ -688,15 +665,8 @@
                     deleted: deletedList.slice(),
                     time: Date.now()
                 };
-                try {
-                    localStorage.setItem(SKIP_BACKUP_KEY, JSON.stringify(snap));
-                } catch (e) {
-                    // 存储空间不足时，放弃已删除列表，只备份其余内容
-                    try {
-                        snap.deleted = [];
-                        localStorage.setItem(SKIP_BACKUP_KEY, JSON.stringify(snap));
-                    } catch (e2) {}
-                }
+                try { localStorage.setItem(SKIP_BACKUP_KEY, JSON.stringify(snap)); }
+                catch (e) { try { snap.deleted = []; localStorage.setItem(SKIP_BACKUP_KEY, JSON.stringify(snap)); } catch (e2) {} }
             }
             skipBackup = loadSkipBackup();
             state.skipped = []; skipSet.clear();
@@ -714,12 +684,25 @@
         render();
     }
 
-    // 搜索框有内容时，全选/反选/清空只作用于当前搜索匹配的项目
     function matchText(name, id) {
         const q = els && els.filter ? els.filter.value.trim().toLowerCase() : '';
         return !q || String(name).toLowerCase().includes(q) || String(id).includes(q);
     }
-    function matchesFilter(g) { return matchText(g.itemName, g.packageId); }
+
+    function matchesPendingFilter(g, ignoreCats) {
+        if (!view.pf) return true;
+        const m = view.pf.method, from = view.pf.from, to = view.pf.to, cats = view.pf.cats;
+        if (!ignoreCats && cats && cats.size && !g.cats.some(c => cats.has(c))) return false;
+        if (m && g.method !== m) return false;
+        if (from !== null || to !== null) {
+            if (g.date == null) return false;
+            if (from !== null && g.date < from) return false;
+            if (to !== null && g.date > to) return false;
+        }
+        return true;
+    }
+
+    function matchesFilter(g) { return matchText(g.itemName, g.packageId) && matchesPendingFilter(g); }
     function skippedFiltered() { return state.skipped.filter(id => matchText(state.skippedInfo[id] || '', id)); }
 
     function selectAll(checked) {
@@ -746,23 +729,20 @@
         render();
     }
 
-    // 将"已跳过"页签中勾选的项目移出跳过列表，放回待删除列表
     async function unskipChecked() {
         if (run.running) return;
         const ids = state.skipped.filter(id => view.skipSel.has(id));
-        if (!ids.length) {
-            log(t('unskipNone'), 'warn');
-            return;
-        }
+        if (!ids.length) { log(t('unskipNone'), 'warn'); return; }
         const restored = ids.map(id => {
             const name = state.skippedInfo[id] || t('unknownName');
             skipSet.delete(id);
             delete state.skippedInfo[id];
-            return { packageId: id, itemName: name, attempts: 0, cats: categorize(name), checked: true };
+            return { packageId: id, itemName: name, attempts: 0, cats: categorize(name), checked: true, dateText: '', date: null, method: '' };
         });
         const idSet = new Set(ids);
         state.skipped = state.skipped.filter(id => !idSet.has(id));
         view.skipSel.clear();
+        resetPendingFilter();
         saveState();
 
         if (run.scanList.length) {
@@ -780,27 +760,18 @@
         }
     }
 
-    // 将勾选的项目加入跳过列表（永不删除），并从当前扫描列表中移除
     function skipChecked() {
         if (run.running || !run.scanList.length) return;
         let added = 0;
         const keep = [];
         for (const g of run.scanList) {
             if (g.checked) {
-                if (!skipSet.has(g.packageId)) {
-                    skipSet.add(g.packageId);
-                    state.skipped.push(g.packageId);
-                }
+                if (!skipSet.has(g.packageId)) { skipSet.add(g.packageId); state.skipped.push(g.packageId); }
                 state.skippedInfo[g.packageId] = g.itemName;
                 added++;
-            } else {
-                keep.push(g);
-            }
+            } else keep.push(g);
         }
-        if (!added) {
-            log(t('skipSelNone'), 'warn');
-            return;
-        }
+        if (!added) { log(t('skipSelNone'), 'warn'); return; }
         run.scanList = keep;
         saveState();
         log(t('skipSelDone', added, state.skipped.length), 'ok');
@@ -808,11 +779,98 @@
         render();
     }
 
-    function selectOnlyCat(cat) {
+    function toggleCatFilter(cat) {
         if (run.running || !run.scanList.length) return;
-        run.scanList.forEach(g => { g.checked = g.cats.includes(cat); });
+        const pf = view.pf || { method: '', from: null, to: null, cats: new Set() };
+        if (!pf.cats) pf.cats = new Set();
+        if (pf.cats.has(cat)) pf.cats.delete(cat); else pf.cats.add(cat);
+        const hasCond = !!(pf.method || pf.from !== null || pf.to !== null || pf.cats.size);
+        view.pf = hasCond ? pf : null;
+        syncFilterInputs();
+        let n = 0;
+        run.scanList.forEach(g => {
+            const ok = !g.protected && matchesPendingFilter(g);
+            g.checked = ok;
+            if (ok) n++;
+        });
+        log(view.pf ? t('fApplied', n) : t('fCleared'), view.pf && !n ? 'warn' : 'info');
         view.sig = '';
         render();
+    }
+
+    function applyConditionFilter() {
+        if (run.running) return;
+        const m = els.fMethod.value;
+        const from = els.fFrom.value ? new Date(els.fFrom.value + 'T00:00:00').getTime() : null;
+        const to = els.fTo.value ? new Date(els.fTo.value + 'T23:59:59.999').getTime() : null;
+        const cats = (view.pf && view.pf.cats) ? view.pf.cats : new Set();
+        const hasCond = !!(m || from !== null || to !== null || cats.size);
+        view.pf = hasCond ? { method: m, from: from, to: to, cats: cats } : null;
+
+        let n = 0;
+        if (run.scanList.length) {
+            run.scanList.forEach(g => {
+                const ok = !g.protected && matchesPendingFilter(g);
+                g.checked = ok;
+                if (ok) n++;
+            });
+        }
+        if (hasCond) {
+            if (view.tab === 'perm') {
+                let vis = 0;
+                for (const g of run.nonRemovableList) if (matchesPendingFilter(g, true)) vis++;
+                log(t('fAppliedPerm', vis), vis ? 'info' : 'warn');
+            } else {
+                log(t('fApplied', n), n ? 'info' : 'warn');
+            }
+        } else {
+            log(t('fCleared'), 'info');
+        }
+        view.sig = '';
+        render();
+    }
+
+    function clearPendingFilter() {
+        if (run.running) return;
+        if (!view.pf) return;
+        resetPendingFilter();
+        log(t('fCleared'), 'info');
+        view.sig = '';
+        render();
+    }
+
+    function resetPendingFilter() {
+        view.pf = null;
+        if (els) {
+            els.fMethod.value = '';
+            els.fFrom.value = '';
+            els.fTo.value = '';
+        }
+    }
+
+    function syncFilterInputs() {
+        if (!els) return;
+        els.fFrom.value = (view.pf && view.pf.from !== null) ? fmtInputDate(view.pf.from) : '';
+        els.fTo.value = (view.pf && view.pf.to !== null) ? fmtInputDate(view.pf.to) : '';
+    }
+
+    function methodSourceList() {
+        return view.tab === 'perm' ? run.nonRemovableList : run.scanList;
+    }
+
+    function renderMethodOptions() {
+        if (!els || !els.fMethod) return;
+        const cur = (view.pf ? view.pf.method : '') || els.fMethod.value;
+        const counts = new Map();
+        methodSourceList().forEach(g => {
+            if (g.method) counts.set(g.method, (counts.get(g.method) || 0) + 1);
+        });
+        els.fMethod.textContent = '';
+        els.fMethod.add(new Option(t('f_anyMethod'), ''));
+        [...counts.entries()].sort((a, b) => b[1] - a[1])
+            .forEach(([k, n]) => els.fMethod.add(new Option(`${k} (${n})`, k)));
+        if (cur && !counts.has(cur)) els.fMethod.add(new Option(`${cur} (0)`, cur));
+        els.fMethod.value = cur || '';
     }
 
     function updateSelInfo() {
@@ -824,9 +882,28 @@
             return;
         }
         if (!run.scanList.length) { els.selinfo.textContent = ''; return; }
-        let sel = 0;
-        for (const g of run.scanList) if (g.checked) sel++;
-        els.selinfo.textContent = t('sel_info', sel, run.scanList.length);
+        let sel = 0, vis = 0;
+        for (const g of run.scanList) {
+            if (matchesPendingFilter(g)) {
+                vis++;
+                if (g.checked) sel++;
+            }
+        }
+        els.selinfo.textContent = t('sel_info', sel, view.pf ? vis : run.scanList.length);
+    }
+
+    function updateFInfo(isPending) {
+        if (!els || !els.fInfo) return;
+        if (!view.pf) { els.fInfo.textContent = ''; return; }
+        let vis = 0, total = 0;
+        if (isPending) {
+            total = run.scanList.length;
+            for (const g of run.scanList) if (matchesPendingFilter(g)) vis++;
+        } else {
+            total = run.nonRemovableList.length;
+            for (const g of run.nonRemovableList) if (matchesPendingFilter(g, true)) vis++;
+        }
+        els.fInfo.textContent = t('fInfo', vis, total);
     }
 
     async function quickClean(cat) {
@@ -834,65 +911,44 @@
         if (!run.scanList.length) {
             log(t('quickScanning'), 'info');
             await scanOnly();
-            if (!run.scanList.length) {
-                log(t('quickNoItems'), 'warn');
-                return;
-            }
+            if (!run.scanList.length) { log(t('quickNoItems'), 'warn'); return; }
         }
         let count = 0;
         run.scanList.forEach(g => {
-            g.checked = !g.protected && g.cats.includes(cat);
+            g.checked = !g.protected && g.cats.includes(cat) && matchesPendingFilter(g, true);
             if (g.checked) count++;
         });
         if (!count) {
             log(t('quickNone', t('cat_' + cat)), 'warn');
-            view.tab = 'pending';
-            view.sig = '';
-            render();
+            view.tab = 'pending'; view.sig = ''; render();
             return;
         }
         if (!window.confirm(t('confirmDelete'))) {
-            view.tab = 'pending';
-            view.sig = '';
-            render();
+            view.tab = 'pending'; view.sig = ''; render();
             return;
         }
         log(t('quickStart', count, t('cat_' + cat)), 'info');
-        view.tab = 'pending';
-        view.sig = '';
-        render();
+        view.tab = 'pending'; view.sig = ''; render();
         await runCleaning(true);
     }
 
-    // 将名称包含 Free Weekend 的项目加入跳过列表（永久不删除）
     async function skipFreeWeekend() {
         if (run.running) return;
         if (!run.scanList.length) {
             log(t('skipFWScanning'), 'info');
             await scanOnly();
-            if (!run.scanList.length) {
-                log(t('skipFWNoItems'), 'warn');
-                return;
-            }
+            if (!run.scanList.length) { log(t('skipFWNoItems'), 'warn'); return; }
         }
         let added = 0;
         const keep = [];
         for (const g of run.scanList) {
             if (FREE_WEEKEND_RE.test(g.itemName)) {
-                if (!skipSet.has(g.packageId)) {
-                    skipSet.add(g.packageId);
-                    state.skipped.push(g.packageId);
-                }
+                if (!skipSet.has(g.packageId)) { skipSet.add(g.packageId); state.skipped.push(g.packageId); }
                 state.skippedInfo[g.packageId] = g.itemName;
                 added++;
-            } else {
-                keep.push(g);
-            }
+            } else keep.push(g);
         }
-        if (!added) {
-            log(t('skipFWNone'), 'warn');
-            return;
-        }
+        if (!added) { log(t('skipFWNone'), 'warn'); return; }
         run.scanList = keep;
         saveState();
         log(t('skipFWDone', added, state.skipped.length), 'ok');
@@ -910,7 +966,6 @@
         render();
     }
 
-    // 清空日志面板；运行中也可使用，不影响任何记录
     function clearLog() {
         if (!els || !els.log) return;
         els.log.textContent = '';
@@ -924,25 +979,14 @@
     function restoreSkipped() {
         if (run.running) return;
         const b = loadSkipBackup();
-        if (!backupHasContent(b)) {
-            log(t('restoreEmpty'), 'warn');
-            return;
-        }
+        if (!backupHasContent(b)) { log(t('restoreEmpty'), 'warn'); return; }
         let added = 0;
         for (const id of (b.skipped || [])) {
-            if (!skipSet.has(id)) {
-                skipSet.add(id);
-                state.skipped.push(id);
-                added++;
-            }
-            if (b.skippedInfo && b.skippedInfo[id] && !state.skippedInfo[id]) {
-                state.skippedInfo[id] = b.skippedInfo[id];
-            }
+            if (!skipSet.has(id)) { skipSet.add(id); state.skipped.push(id); added++; }
+            if (b.skippedInfo && b.skippedInfo[id] && !state.skippedInfo[id]) state.skippedInfo[id] = b.skippedInfo[id];
         }
-        // 累计删除数：加回备份的数量
         const r = Number(b.removed) > 0 ? Math.floor(Number(b.removed)) : 0;
         state.removed += r;
-        // 已删除列表：合并（按 ID+时间去重），备份的放在前面
         let d = 0;
         if (Array.isArray(b.deleted) && b.deleted.length) {
             const have = new Set(deletedList.map(e => e[0] + '|' + e[2]));
@@ -952,11 +996,9 @@
             d = add.length;
             saveDeleted();
         }
-        // 冷却状态：取较大值（更保守）
         state.minGap = Math.max(state.minGap || 0, Number(b.minGap) || 0);
         state.coolLevel = Math.max(state.coolLevel || 0, Number(b.coolLevel) || 0);
         state.cooldownUntil = Math.max(state.cooldownUntil || 0, Number(b.cooldownUntil) || 0);
-        // 恢复后删除备份，防止重复点击导致累计数被重复加回
         try { localStorage.removeItem(SKIP_BACKUP_KEY); } catch (e) {}
         skipBackup = null;
         saveState();
@@ -990,7 +1032,7 @@
         if (nearBottom) box.scrollTop = box.scrollHeight;
     }
 
-    const view = { tab: 'log', sig: '', showAll: false, skipSel: new Set() };
+    const view = { tab: 'log', sig: '', showAll: false, skipSel: new Set(), pf: null };
     const LIST_CAP = 300;
 
     function fmtWhen(ts) {
@@ -1004,14 +1046,11 @@
         if (tab === 'pending') {
             if (!run.running && run.scanList.length) {
                 run.scanList.forEach((g, idx) => {
+                    if (!matchesPendingFilter(g)) return;
                     rows.push({
-                        id: g.packageId,
-                        name: g.itemName,
-                        cats: g.cats,
-                        checked: !!g.checked,
-                        idx,
-                        selectable: true,
-                        extra: g.cats.map(c => t('cat_' + c)).join(' · ')
+                        id: g.packageId, name: g.itemName, cats: g.cats,
+                        checked: !!g.checked, idx, selectable: true,
+                        extra: [g.cats.map(c => t('cat_' + c)).join('/'), g.dateText, g.method].filter(Boolean).join(' · ')
                     });
                 });
             } else {
@@ -1020,6 +1059,12 @@
                 if (run.tail && run.tail.length) {
                     run.tail.forEach((g, i) => rows.push({ id: g.packageId, name: g.itemName, extra: t('tailPos', i + 1) }));
                 }
+            }
+        } else if (tab === 'perm') {
+            for (let i = run.nonRemovableList.length - 1; i >= 0; i--) {
+                const g = run.nonRemovableList[i];
+                if (!matchesPendingFilter(g, true)) continue;
+                rows.push({ id: g.packageId || '', name: g.itemName, extra: [g.dateText, g.method].filter(Boolean).join(' · ') });
             }
         } else if (tab === 'deleted') {
             for (let i = deletedList.length - 1; i >= 0; i--) {
@@ -1050,14 +1095,31 @@
     function renderSelbar() {
         if (!els || !els.selbar) return;
         const pendingMode = view.tab === 'pending' && !run.running && run.scanList.length > 0;
+        const permMode = view.tab === 'perm' && run.nonRemovableList.length > 0;
         const skippedMode = view.tab === 'skipped' && !run.running && state.skipped.length > 0;
-        const show = pendingMode || skippedMode;
-        els.selbar.hidden = !show;
-        if (!show) return;
-        els.cats.hidden = !pendingMode;
-        els.skipsel.hidden = !pendingMode;
-        els.unskipsel.hidden = !skippedMode;
-        updateSelInfo();
+
+        els.selbar.hidden = !(pendingMode || skippedMode);
+        els.fbar.hidden = !(pendingMode || permMode);
+
+        if (pendingMode) {
+            els.cats.hidden = false;
+            els.skipsel.hidden = false;
+            els.unskipsel.hidden = true;
+            updateSelInfo();
+        } else if (skippedMode) {
+            els.cats.hidden = true;
+            els.skipsel.hidden = true;
+            els.unskipsel.hidden = false;
+            updateSelInfo();
+        }
+
+        if (pendingMode || permMode) {
+            els.fClear.hidden = !view.pf;
+            updateFInfo(pendingMode);
+        } else {
+            els.fClear.hidden = true;
+            els.fInfo.textContent = '';
+        }
     }
 
     function renderCatButtons() {
@@ -1065,18 +1127,20 @@
         els.cats.textContent = '';
         const counts = {};
         for (const g of run.scanList) {
+            if (!matchesPendingFilter(g, true)) continue;
             for (const c of g.cats) counts[c] = (counts[c] || 0) + 1;
         }
+        const active = (view.pf && view.pf.cats) ? view.pf.cats : new Set();
         ['demo', 'soundtrack', 'dlc', 'tool', 'game'].forEach(cat => {
             const n = counts[cat] || 0;
-            if (!n) return;
+            if (!n && !active.has(cat)) return;
             const b = document.createElement('button');
-            b.className = 'slc-cat';
+            b.className = 'slc-cat' + (active.has(cat) ? ' on' : '');
             b.textContent = t('cat_' + cat);
             const em = document.createElement('em');
             em.textContent = n;
             b.appendChild(em);
-            b.addEventListener('click', () => selectOnlyCat(cat));
+            b.addEventListener('click', () => toggleCatFilter(cat));
             els.cats.appendChild(b);
         });
     }
@@ -1091,8 +1155,13 @@
         if (!rows.length) {
             const d = document.createElement('div');
             d.className = 'slc-empty';
-            const emptyKey = { pending: 'emptyPending', deleted: 'emptyDeleted', skipped: 'emptySkipped', failed: 'emptyFailed' }[tab];
-            d.textContent = q ? t('noMatch') : t(emptyKey);
+            const emptyKey = { pending: 'emptyPending', perm: 'emptyPerm', deleted: 'emptyDeleted', skipped: 'emptySkipped', failed: 'emptyFailed' }[tab];
+            let msg;
+            if (q) msg = t('noMatch');
+            else if ((tab === 'pending' && view.pf && run.scanList.length) ||
+                     (tab === 'perm' && view.pf && run.nonRemovableList.length)) msg = t('noFilterMatch');
+            else msg = t(emptyKey);
+            d.textContent = msg;
             box.appendChild(d);
             return;
         }
@@ -1130,7 +1199,6 @@
             b.textContent = view.showAll ? t('showLess', LIST_CAP) : t('showAll', rows.length);
             b.addEventListener('click', () => { view.showAll = !view.showAll; view.sig = ''; render(); });
             m.appendChild(b);
-            // 展开全部后按钮放在顶部，方便收起
             if (view.showAll) frag.insertBefore(m, frag.firstChild);
             else frag.appendChild(m);
         }
@@ -1138,11 +1206,17 @@
         box.scrollTop = top;
     }
 
+    function pfToken() {
+        if (!view.pf) return '';
+        return `${view.pf.method}|${view.pf.from}|${view.pf.to}|${view.pf.cats ? [...view.pf.cats].sort().join(',') : ''}`;
+    }
+
     function renderTabs() {
         const counts = {
             pending: (!run.running && run.scanList.length)
-                ? run.scanList.length
+                ? (view.pf ? run.scanList.filter(g => matchesPendingFilter(g)).length : run.scanList.length)
                 : run.queue.length + (run.cur ? 1 : 0) + (run.tail ? run.tail.length : 0),
+            perm: run.nonRemovableList.filter(g => matchesPendingFilter(g, true)).length,
             deleted: deletedList.length,
             skipped: state.skipped.length,
             failed: run.retry.size + run.gaveUp.size
@@ -1163,10 +1237,11 @@
 
         const q = els.filter.value.trim().toLowerCase();
         const pendingToken = (!run.running && run.scanList.length)
-            ? `S${run.scanList.length}`
+            ? `S${run.scanList.length}|${pfToken()}`
             : `${run.queue.length}|${run.queue[0] ? run.queue[0].packageId : ''}|${run.cur ? run.cur.packageId : ''}|${run.tail ? run.tail.length : 0}`;
         const token = {
             pending: pendingToken,
+            perm: `${run.nonRemovableList.length}|${pfToken()}`,
             deleted: deletedList.length,
             skipped: state.skipped.length,
             failed: `${run.retry.size}|${run.gaveUp.size}|${[...run.retry.values()].reduce((a, g) => a + g.attempts, 0)}`
@@ -1175,8 +1250,11 @@
         if (sig === view.sig) return;
         view.sig = sig;
 
-        if (view.tab === 'pending' && !run.running && run.scanList.length) {
-            renderCatButtons();
+        if (view.tab === 'pending' && !run.running && run.scanList.length) renderCatButtons();
+        if ((view.tab === 'pending' && !run.running && run.scanList.length) ||
+            (view.tab === 'perm' && run.nonRemovableList.length)) {
+            renderMethodOptions();
+            syncFilterInputs();
         }
         renderList(view.tab, q);
     }
@@ -1198,6 +1276,7 @@
         els.removed.textContent = state.removed;
         els.skipped.textContent = state.skipped.length;
         els.retry.textContent = run.retry.size;
+        els.perm.textContent = run.nonRemovableList.length;
         const remain = ctl ? Math.max(0, ctl.total - ctl.finished) : 0;
         els.remain.textContent = remain + (ctl && !ctl.readerDone ? '+' : '');
 
@@ -1212,8 +1291,12 @@
         else els.cur.textContent = t('notStarted');
 
         let eta = '';
-        if (run.running && !run.scanning && run.processed >= 5 && remain > 0) {
-            const per = (Date.now() - run.startAt) / run.processed;
+        if (run.running && !run.scanning && remain > 0) {
+            const basePer = state.delaySec * 1000 + state.minGap + 800;
+            const actualPer = run.processed > 0 ? (Date.now() - run.startAt) / run.processed : basePer;
+            let per;
+            if (run.processed >= 3) per = actualPer;
+            else per = (basePer * (3 - run.processed) + actualPer * run.processed) / 3;
             const ms = per * remain + left;
             eta = t('eta', fmtDhm(ms), fmtAt(ms));
             if (ctl && !ctl.readerDone) eta += (state.lang === 'zh' ? '' : ' ') + t('etaReading');
@@ -1225,9 +1308,7 @@
         if (left > 0) {
             els.cool.hidden = false;
             els.cool.innerHTML = t('coolBar', fmtClock(left), state.coolLevel, run.running);
-        } else {
-            els.cool.hidden = true;
-        }
+        } else els.cool.hidden = true;
 
         els.start.disabled = run.running;
         els.scan.disabled = run.running;
@@ -1242,8 +1323,7 @@
         els.qTool.disabled = run.running;
         renderTabs();
 
-        document.title = run.running && ctl && ctl.total
-            ? `[${ctl.finished}/${ctl.total}] ${origTitle}` : origTitle;
+        document.title = run.running && ctl && ctl.total ? `[${ctl.finished}/${ctl.total}] ${origTitle}` : origTitle;
     }
 
     async function waitInterruptible(ms, label) {
@@ -1265,23 +1345,35 @@
         return false;
     }
 
-    function parseRemovable(doc) {
-        const games = [];
+    function parseLicenses(doc) {
+        const removable = [];
+        const nonRemovable = [];
         doc.querySelectorAll('.account_table tr').forEach(row => {
-            const link = row.querySelector('a[href^="javascript:RemoveFreeLicense"]');
-            if (!link) return;
-            const match = link.getAttribute('href').match(/RemoveFreeLicense\(\s*(\d+)\s*,/);
-            if (!match) return;
-            const packageId = match[1];
-            if (skipSet.has(packageId) || run.gaveUp.has(packageId)) return;
             const cells = row.querySelectorAll('td');
-            games.push({
-                packageId,
-                itemName: cells[1] ? cells[1].textContent.trim() : t('unknownName'),
-                attempts: 0
-            });
+            if (!cells.length) return;
+            const itemName = cells[1] ? cells[1].textContent.trim() : t('unknownName');
+            const dateEl = row.querySelector('.license_date_col') || cells[0];
+            const methodEl = row.querySelector('.license_acquisition_col') || cells[cells.length - 1];
+            const dateText = dateEl ? dateEl.textContent.trim() : '';
+            const method = methodEl && methodEl !== cells[1]
+                ? methodEl.textContent.trim().replace(/\s+/g, ' ') : '';
+            const link = row.querySelector('a[href^="javascript:RemoveFreeLicense"]');
+            if (link) {
+                const match = link.getAttribute('href').match(/RemoveFreeLicense\(\s*(\d+)\s*,/);
+                if (!match) return;
+                const packageId = match[1];
+                if (skipSet.has(packageId) || run.gaveUp.has(packageId)) return;
+                removable.push({ packageId, itemName, attempts: 0, dateText, date: parseDate(dateText), method });
+            } else {
+                let pid = '';
+                const m1 = row.innerHTML.match(/subid["'\s:=]+(\d+)/i) ||
+                           row.innerHTML.match(/packageid["'\s:=]+(\d+)/i) ||
+                           row.innerHTML.match(/appid["'\s:=]+(\d+)/i);
+                if (m1) pid = m1[1];
+                nonRemovable.push({ packageId: pid, itemName, dateText, date: parseDate(dateText), method });
+            }
         });
-        return games;
+        return { removable, nonRemovable };
     }
 
     function findNext(html, curOffset) {
@@ -1304,9 +1396,7 @@
                 const resp = await fetch(url, { credentials: 'same-origin' });
                 if (resp.ok) return await resp.text();
                 log(t('pageHttp', resp.status), 'warn');
-            } catch (e) {
-                log(t('pageErr', e.message), 'warn');
-            }
+            } catch (e) { log(t('pageErr', e.message), 'warn'); }
             if (!(await waitInterruptible(rand(CFG.netRetryDelay)))) return null;
         }
         return null;
@@ -1320,9 +1410,9 @@
             for (let page = 1; page <= CFG.maxPages && run.running; page++) {
                 const html = await fetchPage(url);
                 if (html === null) break;
-
                 const doc = new DOMParser().parseFromString(html, 'text/html');
-                for (const g of parseRemovable(doc)) {
+                const parsed = parseLicenses(doc);
+                for (const g of parsed.removable) {
                     if (seen.has(g.packageId)) continue;
                     if (run.allowedSet && !run.allowedSet.has(g.packageId)) continue;
                     seen.add(g.packageId);
@@ -1331,21 +1421,22 @@
                     queue.push(g);
                     ctl.total++;
                 }
+                for (const g of parsed.nonRemovable) {
+                    const key = g.itemName + '|' + g.dateText + '|' + g.method;
+                    if (run.nonRemovableSeen.has(key)) continue;
+                    run.nonRemovableSeen.add(key);
+                    g.cats = categorize(g.itemName);
+                    run.nonRemovableList.push(g);
+                }
                 ctl.pages = page;
                 if (page % 5 === 1) log(t('readProg', page, ctl.total), 'info');
-
                 const next = findNext(html, offset);
-                if (!next) {
-                    log(t('readDone', page, ctl.total), 'info');
-                    break;
-                }
+                if (!next) { log(t('readDone', page, ctl.total), 'info'); break; }
                 offset = next.offset;
                 url = `https://store.steampowered.com/account/licenses/?continuationToken=${next.token}&offset=${next.offset}`;
                 await sleep(rand(CFG.pageFetchDelay));
             }
-        } finally {
-            ctl.readerDone = true;
-        }
+        } finally { ctl.readerDone = true; }
     }
 
     async function removeGame(packageId) {
@@ -1360,9 +1451,7 @@
             const data = await response.json();
             if (data.success === 1) return { success: true };
             return { success: false, code: data.success, error: t('errCode', data.success) };
-        } catch (e) {
-            return { success: false, error: e.message };
-        }
+        } catch (e) { return { success: false, error: e.message }; }
     }
 
     function triggerCooldown(reason) {
@@ -1385,9 +1474,7 @@
         run.okStreak++;
         run.sinceLimit++;
         run.failStreak = [];
-        if (run.okStreak % CFG.coolDecayAfter === 0 && state.coolLevel > 0) {
-            state.coolLevel--;
-        }
+        if (run.okStreak % CFG.coolDecayAfter === 0 && state.coolLevel > 0) state.coolLevel--;
         if (run.okStreak % CFG.gapDecayAfter === 0 && state.minGap > 0) {
             state.minGap = Math.round(state.minGap * CFG.gapDecay);
             if (state.minGap < 1000) state.minGap = 0;
@@ -1410,7 +1497,6 @@
                 log(t('okLog', g.itemName, g.packageId), 'ok');
                 return 'removed';
             }
-
             if (res.code === 29) {
                 state.skipped.push(g.packageId);
                 state.skippedInfo[g.packageId] = g.itemName;
@@ -1421,17 +1507,8 @@
                 log(t('skipLog', g.itemName, g.packageId), 'skip');
                 return 'skipped';
             }
-
-            if (res.code === 84) {
-                triggerCooldown(t('reason84'));
-                continue;
-            }
-
-            if (res.code === 24) {
-                log(t('err24'), 'err');
-                run.running = false;
-                return 'stop';
-            }
+            if (res.code === 84) { triggerCooldown(t('reason84')); continue; }
+            if (res.code === 24) { log(t('err24'), 'err'); run.running = false; return 'stop'; }
 
             g.attempts = (g.attempts || 0) + 1;
             g.lastErr = res.error;
@@ -1445,7 +1522,6 @@
                 triggerCooldown(t('reasonBreaker', CFG.breakerAfter, res.error));
                 return 'deferred';
             }
-
             if (g.attempts >= CFG.maxAttempts) {
                 run.gaveUp.set(g.packageId, g);
                 run.retry.delete(g.packageId);
@@ -1453,7 +1529,6 @@
                 log(t('gaveLog', g.itemName, g.packageId, g.attempts, res.error), 'err');
                 return 'gaveup';
             }
-
             run.retry.set(g.packageId, g);
             log(t('deferLog', g.itemName, g.packageId, res.error, g.attempts, CFG.maxAttempts), 'warn');
             return 'deferred';
@@ -1507,12 +1582,8 @@
         let preQueue = null;
         if (run.scanList.length) {
             const checked = run.scanList.filter(g => g.checked);
-            if (!checked.length) {
-                log(t('noSelection'), 'warn');
-                return;
-            }
+            if (!checked.length) { log(t('noSelection'), 'warn'); return; }
             allowedSet = new Set(checked.map(g => g.packageId));
-            // 已有扫描结果：第一轮直接用它作队列，不再重新读取分页
             preQueue = checked.map(g => Object.assign({}, g, { attempts: 0, lastErr: '' }));
         }
         if (!skipConfirm && !window.confirm(t('confirmDelete'))) return;
@@ -1531,9 +1602,7 @@
 
         if (allowedSet) log(t('startLogChecked', allowedSet.size), 'info');
         else log(t('startLog', state.removed, state.skipped.length), 'info');
-        if (state.cooldownUntil > Date.now()) {
-            log(t('stillCooling', fmtClock(state.cooldownUntil - Date.now())), 'warn');
-        }
+        if (state.cooldownUntil > Date.now()) log(t('stillCooling', fmtClock(state.cooldownUntil - Date.now())), 'warn');
 
         let finishedAll = false;
         try {
@@ -1550,16 +1619,16 @@
                 run.tail = [];
                 run.preparing = false;
                 if (usePre) log(t('usingScan', queue.length), 'info');
-                else readerTask(queue, ctl);
+                else {
+                    if (round === 1) { run.nonRemovableList = []; run.nonRemovableSeen = new Set(); }
+                    readerTask(queue, ctl);
+                }
 
-                // 保护最新 N 个：仅用于未扫描直接清理的情况（扫描后改由自动取消勾选实现）
                 const protectN = allowedSet ? 0 : Math.max(0, Math.floor(Number(state.skipFirst) || 0));
                 if (protectN > 0) {
                     log(t('prepLog', protectN), 'info');
                     run.preparing = true;
-                    while (run.running && queue.length < protectN && !ctl.readerDone) {
-                        await sleep(100);
-                    }
+                    while (run.running && queue.length < protectN && !ctl.readerDone) await sleep(100);
                     run.preparing = false;
                     const prot = queue.splice(0, Math.min(protectN, queue.length));
                     ctl.total -= prot.length;
@@ -1569,11 +1638,7 @@
                 while (run.running) {
                     if (!queue.length) {
                         if (!ctl.readerDone) { await sleep(300); continue; }
-                        if (run.tail.length) {
-                            queue.push(...run.tail);
-                            run.tail = [];
-                            continue;
-                        }
+                        if (run.tail.length) { queue.push(...run.tail); run.tail = []; continue; }
                         break;
                     }
                     const g = queue.shift();
@@ -1596,21 +1661,18 @@
                         await pace(r);
                     }
                 }
-
                 if (!run.running) break;
                 if (ctl.finished === 0) { finishedAll = true; break; }
             }
-        } catch (e) {
-            log(t('scriptErr', e && e.message), 'err');
-        }
+        } catch (e) { log(t('scriptErr', e && e.message), 'err'); }
 
         run.last = finishedAll ? 'done' : 'stopped';
         run.running = false;
         run.preparing = false;
         run.tail = [];
-        // 清理结束后丢弃过期的扫描列表与勾选状态，避免下次误用旧勾选
         run.scanList = [];
         run.allowedSet = null;
+        resetPendingFilter();
         view.sig = '';
         keepAwake(false);
         saveState();
@@ -1633,18 +1695,17 @@
         run.queue = [];
         run.tail = [];
         run.scanList = [];
+        run.nonRemovableList = [];
+        run.nonRemovableSeen = new Set();
+        resetPendingFilter();
         const ctl = { readerDone: false, total: 0, finished: 0, pages: 0 };
         run.ctl = ctl;
         log(t('scanStart'), 'info');
-        try {
-            await readerTask(run.queue, ctl);
-        } catch (e) {
-            log(t('scanErr', e && e.message), 'err');
-        }
+        try { await readerTask(run.queue, ctl); }
+        catch (e) { log(t('scanErr', e && e.message), 'err'); }
         const completed = run.running;
         run.scanList = run.queue.slice();
         run.queue = [];
-        // 保护最新 N 个：扫描完成后自动取消勾选列表最前面的 N 个
         if (completed) {
             const pn = Math.max(0, Math.floor(Number(state.skipFirst) || 0));
             const pc = Math.min(pn, run.scanList.length);
